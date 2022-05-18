@@ -3,15 +3,6 @@
 version = 3
 
 [[package]]
-name = "aead"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b613b8e1e3cf911a086f53f03bf286f52fd7a7258e4fa606f0ef220d39d8877"
-dependencies = [
- "generic-array",
-]
-
-[[package]]
 name = "base16ct"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -56,19 +47,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chacha20poly1305"
-version = "0.10.0-pre"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "746c430f71e66469abcf493c11484b1a86b957c84fc2d0ba664cd12ac23679ea"
-dependencies = [
- "aead",
- "chacha20",
- "cipher",
- "poly1305",
- "zeroize",
-]
-
-[[package]]
 name = "cipher"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -76,7 +54,6 @@ checksum = "d1873270f8f7942c191139cb8a40fd228da6c3fd2fc376d7e92d47aa14aeb59e"
 dependencies = [
  "crypto-common",
  "inout",
- "zeroize",
 ]
 
 [[package]]
@@ -273,12 +250,15 @@ name = "nora_ssh"
 version = "0.1.0"
 dependencies = [
  "chacha20",
- "chacha20poly1305",
  "digest 0.10.3",
  "ecdsa",
+ "elliptic-curve",
+ "generic-array",
  "p256",
+ "poly1305",
  "rand",
  "sha2",
+ "subtle",
  "x25519-dalek",
 ]
 
