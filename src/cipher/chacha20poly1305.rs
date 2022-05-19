@@ -3,7 +3,7 @@
 // FIXME ChaCha20Legacy internally uses a 32 bit counter while we need a 64-bit counter to be
 // truly compatible.
 
-use super::{Cipher, Error};
+use super::{BlockSize, Cipher, Error};
 use crate::key_exchange::{Direction, KeyMaterial};
 use chacha20::{
     cipher::{StreamCipher, StreamCipherSeekCore},
@@ -53,6 +53,12 @@ impl ChaCha20Poly1305 {
         let (data, tag) = data.split_at(data.len() - TAG_SIZE);
         self.compute_tag(data) == Tag::new(<[u8; TAG_SIZE]>::try_from(tag).unwrap().into())
     }
+
+    fn apply_data(&self, data: &mut [u8]) {
+        let mut cipher = chacha20::ChaCha20LegacyCore::new(&self.key_data, &self.nonce());
+        cipher.set_block_pos(1);
+        chacha20::cipher::StreamCipherCoreWrapper::from_core(cipher).apply_keystream(data);
+    }
 }
 
 impl Cipher for ChaCha20Poly1305 {
@@ -61,16 +67,14 @@ impl Cipher for ChaCha20Poly1305 {
         Ok(length)
     }
 
-    fn decrypt_data<'a>(&mut self, data: &'a mut [u8]) -> Result<&'a mut [u8], Error> {
+    fn decrypt_data<'a>(&mut self, data: &'a mut [u8]) -> Result<(), Error> {
         // Always verify **before** decrypting to avoid oracle attacks
         if self.authenticate(data) {
             let l = data.len() - TAG_SIZE;
-            let data = &mut data[4..l];
-            let mut cipher = chacha20::ChaCha20LegacyCore::new(&self.key_data, &self.nonce());
-            cipher.set_block_pos(1);
-            chacha20::cipher::StreamCipherCoreWrapper::from_core(cipher).apply_keystream(data);
-            self.counter = self.counter.checked_add(1).ok_or(Error)?;
-            Ok(data)
+            self.apply_data(&mut data[4..l]);
+            // 2^70 is 1 ZiB worth of data, which a single session will *never* reach in practice
+            self.counter += 1;
+            Ok(())
         } else {
             Err(Error)
         }
@@ -80,11 +84,17 @@ impl Cipher for ChaCha20Poly1305 {
         let (data, tag) = data.split_at_mut(data.len() - TAG_SIZE);
         let (len, payload) = data.split_at_mut(4);
         ChaCha20Legacy::new(&self.key_length, &self.nonce()).apply_keystream(len);
-        ChaCha20Legacy::new(&self.key_data, &self.nonce()).apply_keystream(payload);
+        self.apply_data(payload);
         tag.copy_from_slice(&self.compute_tag(data).into_bytes());
+        // Ditto
+        self.counter += 1;
     }
 
     fn tag_size(&self) -> usize {
         TAG_SIZE
+    }
+
+    fn block_size(&self) -> BlockSize {
+        BlockSize::B8
     }
 }

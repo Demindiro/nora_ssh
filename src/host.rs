@@ -105,9 +105,7 @@ impl Host<p256::NistP256> {
 
         let mut exchange_hash = D::new();
         let update_string = |hash: &mut D, s: &[u8]| {
-            let mut l = [0; 4];
-            make_string_len(&mut l, s);
-            hash.update(&l);
+            hash.update(&make_string_len(s));
             hash.update(s);
         };
         let update_pos_mpint = |hash: &mut D, s: &[u8]| {
@@ -124,6 +122,7 @@ impl Host<p256::NistP256> {
         let host_pkt = Packet::wrap(
             &mut host_pkt,
             BlockSize::B8,
+            true,
             |buf| {
                 crate::message::KeyExchangeInit::new_payload(
                     buf,
@@ -209,6 +208,7 @@ impl Host<p256::NistP256> {
         let pkt = Packet::wrap(
             &mut pkt_buf,
             BlockSize::B8,
+            true,
             |buf| {
                 KeyExchangeEcdhReply::new_payload(
                     buf,
@@ -221,7 +221,7 @@ impl Host<p256::NistP256> {
             },
             &mut rng,
         );
-        send(pkt.into_raw()).map_err(HandleNewClientError::Other)?;
+        send(pkt.into_raw(0)).map_err(HandleNewClientError::Other)?;
 
         let receive_cipher = In(ChaCha20Poly1305::from_key_material(
             &key_material,
@@ -238,6 +238,7 @@ impl Host<p256::NistP256> {
         let pkt = Packet::wrap(
             &mut pkt_buf,
             BlockSize::B8,
+            true,
             |buf| Message::NewKeys(NewKeys).serialize(buf).unwrap().len(),
             &mut rng,
         );
@@ -268,6 +269,37 @@ pub enum HandleNewClientError<R> {
 
 pub struct Out<D: Cipher>(D);
 
+impl<D: Cipher> Out<D> {
+    pub fn send<R, G, F, Rng>(
+        &mut self,
+        buf: &mut [u8],
+        mut fill: F,
+        mut send: G,
+        rng: Rng,
+    ) -> Result<(), OutError<R>>
+    where
+        F: FnMut(&mut [u8]) -> usize,
+        G: FnMut(&[u8]) -> Result<(), R>,
+        Rng: CryptoRng + RngCore,
+    {
+        let pkt = Packet::wrap(
+            buf,
+            self.0.block_size(),
+            false, // TODO add method to Cipher
+            |buf| fill(buf),
+            rng,
+        );
+        let pkt = pkt.into_raw(self.0.tag_size());
+        self.0.encrypt(pkt);
+        send(pkt).map_err(OutError::Send)
+    }
+}
+
+#[derive(Debug)]
+pub enum OutError<R> {
+    Send(R),
+}
+
 pub struct In<D: Cipher>(D);
 
 impl<D: Cipher> In<D> {
@@ -275,7 +307,7 @@ impl<D: Cipher> In<D> {
         &mut self,
         buf: &'a mut [u8],
         mut recv: F,
-    ) -> Result<Packet<'a>, InError<R>>
+    ) -> Result<&'a mut [u8], InError<R>>
     where
         F: FnMut(&mut [u8]) -> Result<(), R>,
     {
@@ -293,12 +325,11 @@ impl<D: Cipher> In<D> {
         let data = &mut buf[..4 + len + self.0.tag_size()];
         self.0.decrypt_data(data).map_err(InError::Cipher)?;
         data[..4].copy_from_slice(&lenb);
-        Packet::wrap_raw(buf).map_err(InError::Packet)
+        Packet::wrap_raw(buf, false, self.0.block_size())
+            .map_err(InError::Packet)
+            .map(Packet::into_payload)
     }
 }
-
-#[derive(Debug)]
-pub enum OutError {}
 
 #[derive(Debug)]
 pub enum InError<R> {

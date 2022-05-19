@@ -1,14 +1,25 @@
 mod key_exchange;
+mod service;
+pub mod userauth;
 
 pub use key_exchange::{
     KeyExchangeEcdhInit, KeyExchangeEcdhInitParseError, KeyExchangeEcdhReply, KeyExchangeInit,
     KeyExchangeInitParseError, NewKeys, NewKeysParseError,
 };
+pub use service::{
+    ParseServiceAcceptError, ParseServiceRequestError, ServiceAccept, ServiceRequest,
+};
+pub use userauth::UserAuth;
+
+use core::ops::RangeInclusive;
 
 pub enum Message<'a> {
     KeyExchangeInit(KeyExchangeInit<'a>),
     KeyExchangeEcdhInit(KeyExchangeEcdhInit<'a>),
     NewKeys(NewKeys),
+    ServiceRequest(ServiceRequest<'a>),
+    ServiceAccept(ServiceAccept<'a>),
+    UserAuth(UserAuth<'a>),
 }
 
 impl<'a> Message<'a> {
@@ -25,24 +36,33 @@ impl<'a> Message<'a> {
     const KEX_ECDH_INIT: u8 = 30;
     const KEX_ECDH_REPLY: u8 = 31;
 
+    const USERAUTH: RangeInclusive<u8> = 50..=79;
+
     pub fn parse(data: &'a [u8]) -> Result<Self, MessageParseError> {
         match *data.get(0).ok_or(MessageParseError::NoMessageType)? {
             Self::DISCONNECT => todo!(),
             Self::IGNORE => todo!(),
             Self::UNIMPLEMENTED => todo!(),
             Self::DEBUG => todo!(),
-            Self::SERVICE_REQUEST => todo!(),
-            Self::SERVICE_ACCEPT => todo!(),
+            Self::SERVICE_REQUEST => ServiceRequest::parse(&data[1..])
+                .map(Self::ServiceRequest)
+                .map_err(MessageParseError::ServiceRequest),
+            Self::SERVICE_ACCEPT => ServiceAccept::parse(&data[1..])
+                .map(Self::ServiceAccept)
+                .map_err(MessageParseError::ServiceAccept),
             Self::KEXINIT => KeyExchangeInit::parse(&data[1..])
                 .map(Self::KeyExchangeInit)
-                .map_err(MessageParseError::KeyExchangeInitParseError),
+                .map_err(MessageParseError::KeyExchangeInit),
             Self::NEWKEYS => NewKeys::parse(&data[1..])
                 .map(Self::NewKeys)
-                .map_err(MessageParseError::NewKeysParseError),
+                .map_err(MessageParseError::NewKeys),
             Self::KEX_ECDH_INIT => KeyExchangeEcdhInit::parse(&data[1..])
                 .map(Self::KeyExchangeEcdhInit)
-                .map_err(MessageParseError::KeyExchangeEcdhInitParseError),
+                .map_err(MessageParseError::KeyExchangeEcdhInit),
             Self::KEX_ECDH_REPLY => todo!(),
+            t if Self::USERAUTH.contains(&t) => UserAuth::parse(t, &data[1..])
+                .map(Self::UserAuth)
+                .map_err(MessageParseError::UserAuth),
             ty => Err(MessageParseError::UnknownMessageType(ty)),
         }
     }
@@ -55,6 +75,15 @@ impl<'a> Message<'a> {
             Self::KeyExchangeInit(_) => todo!(),
             Self::KeyExchangeEcdhInit(_) => todo!(),
             Self::NewKeys(NewKeys) => send(&[Self::NEWKEYS]),
+            Self::ServiceRequest(s) => {
+                send(&[Self::SERVICE_REQUEST])?;
+                s.send(send)
+            }
+            Self::ServiceAccept(s) => {
+                send(&[Self::SERVICE_ACCEPT])?;
+                s.send(send)
+            }
+            Self::UserAuth(ua) => ua.send(send),
         }
     }
 
@@ -76,9 +105,12 @@ impl<'a> Message<'a> {
 pub enum MessageParseError {
     NoMessageType,
     UnknownMessageType(u8),
-    KeyExchangeInitParseError(KeyExchangeInitParseError),
-    KeyExchangeEcdhInitParseError(KeyExchangeEcdhInitParseError),
-    NewKeysParseError(NewKeysParseError),
+    KeyExchangeInit(KeyExchangeInitParseError),
+    KeyExchangeEcdhInit(KeyExchangeEcdhInitParseError),
+    NewKeys(NewKeysParseError),
+    ServiceRequest(ParseServiceRequestError),
+    ServiceAccept(ParseServiceAcceptError),
+    UserAuth(userauth::ParseError),
 }
 
 #[derive(Debug)]
@@ -136,3 +168,6 @@ macro_rules! msg {
 msg!('a KeyExchangeInit -> as_kex_init, into_kex_init);
 msg!('a KeyExchangeEcdhInit -> as_kex_ecdh_init, into_kex_ecdh_init);
 msg!(NewKeys -> as_new_keys, into_new_keys);
+msg!('a ServiceRequest -> as_service_request, into_service_request);
+msg!('a ServiceAccept -> as_service_accept, into_service_accept);
+msg!('a UserAuth -> as_user_auth, into_user_auth);

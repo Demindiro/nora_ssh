@@ -45,6 +45,11 @@ impl<'a> Packet<'a> {
         &mut self.data[5..5 + l]
     }
 
+    pub fn into_payload(self) -> &'a mut [u8] {
+        let l = self.payload_len();
+        &mut self.data[5..5 + l]
+    }
+
     pub fn as_raw(&self) -> &[u8] {
         &self.data[..4 + self.packet_len()]
     }
@@ -54,14 +59,19 @@ impl<'a> Packet<'a> {
         &mut self.data[..4 + l]
     }
 
-    pub fn into_raw(self) -> &'a mut [u8] {
+    pub fn into_raw(self, with_extra: usize) -> &'a mut [u8] {
         let l = self.packet_len();
-        &mut self.data[..4 + l]
+        &mut self.data[..4 + l + with_extra]
     }
 
-    pub fn wrap_raw(data: &'a mut [u8]) -> Result<Self, WrapRawError> {
+    pub fn wrap_raw(
+        data: &'a mut [u8],
+        pad_with_packet_length: bool,
+        block_size: BlockSize,
+    ) -> Result<Self, WrapRawError> {
         let slf = Self { data };
-        if slf.data.len() & 7 != 0 {
+        let offt = usize::from(pad_with_packet_length) * 4;
+        if (slf.packet_len() + offt) % block_size.to_usize() != 0 {
             Err(WrapRawError::BadAlignment)
         } else if slf.padding_len() + 4 > slf.packet_len() {
             Err(WrapRawError::PaddingTooLarge)
@@ -88,14 +98,21 @@ impl<'a> Packet<'a> {
         Ok(Self { data: buf })
     }
 
-    pub fn wrap<R, F>(buf: &'a mut [u8], block_size: BlockSize, make_payload: F, mut rng: R) -> Self
+    pub fn wrap<R, F>(
+        buf: &'a mut [u8],
+        block_size: BlockSize,
+        pad_with_packet_length: bool,
+        make_payload: F,
+        mut rng: R,
+    ) -> Self
     where
         F: FnOnce(&mut [u8]) -> usize,
         R: CryptoRng + RngCore,
     {
         let block_size = block_size.to_usize();
+        let offset = usize::from(!pad_with_packet_length) * 4;
         let payload_len = make_payload(&mut buf[4 + 1..]);
-        let total_len = (4 + 1 + payload_len + block_size - 1) & !(block_size - 1);
+        let total_len = ((4 + 1 + payload_len + block_size - 1) & !(block_size - 1)) + offset;
         let mut packet_len = total_len - 4;
         let mut padding_len = packet_len - payload_len - 1;
         if padding_len < 4 {

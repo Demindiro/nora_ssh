@@ -10,8 +10,8 @@ pub(crate) fn name_list(data: &[u8]) -> Option<(&[u8], &[u8])> {
     split(data, len)
 }
 
-pub(crate) fn make_string_len(len: &mut [u8; 4], s: &[u8]) {
-    *len = u32::try_from(s.len()).unwrap().to_be_bytes();
+pub(crate) fn make_string_len(s: &[u8]) -> [u8; 4] {
+    u32::try_from(s.len()).unwrap().to_be_bytes()
 }
 
 pub(crate) fn make_string<'a>(buf: &'a mut [u8], s: &[u8]) -> Option<(&'a mut [u8], &'a mut [u8])> {
