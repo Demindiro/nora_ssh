@@ -5,7 +5,9 @@ fn main() {
     use nora_ssh::{
         host::Host,
         identifier::Identifier,
-        message::{userauth::Success, Message, ServiceAccept, UserAuth},
+        message::{
+            channel::{self, Data, Failure, OpenConfirmation}, userauth::Success, Channel, Message, ServiceAccept, UserAuth,
+        },
     };
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::seed_from_u64(0);
@@ -66,5 +68,93 @@ fn main() {
             &mut rng,
         )
         .unwrap();
+
+        // Open channel
+        let data = recv.recv(&mut pkt_buf, |d| c.read_exact(d)).unwrap();
+        let msg = Message::parse(data).unwrap();
+        let ua = msg.into_channel().unwrap().into_open().unwrap();
+        dbg!(core::str::from_utf8(ua.ty));
+        dbg!(ua.channel_a);
+        dbg!(ua.window_size);
+        dbg!(ua.max_packet_size);
+
+        // Accept channel
+        let msg = Message::Channel(Channel::OpenConfirmation(OpenConfirmation {
+            channel_a: ua.channel_a,
+            channel_b: 0xdeadbeef,
+            window_size: ua.window_size,
+            max_packet_size: ua.max_packet_size,
+            stuff: &[],
+        }));
+        send.send(
+            &mut pkt_buf,
+            |buf| msg.serialize(buf).unwrap().len(),
+            |d| c.write_all(d),
+            &mut rng,
+        )
+        .unwrap();
+
+        // Send data
+        let msg = Message::Channel(Channel::Data(Data {
+            channel_b: 0,
+            data: b"Hello, world!\n",
+        }));
+        send.send(
+            &mut pkt_buf,
+            |buf| msg.serialize(buf).unwrap().len(),
+            |d| c.write_all(d),
+            &mut rng,
+        )
+        .unwrap();
+
+        // Receive data
+        loop {
+            let data = match recv.recv(&mut pkt_buf, |d| c.read_exact(d)) {
+                Ok(d) => d,
+                Err(_) => break,
+            };
+            match Message::parse(data).unwrap() {
+                Message::Channel(Channel::Request(r)) => {
+                    dbg!(r.channel_b);
+                    dbg!(core::str::from_utf8(r.ty));
+                    dbg!(r.want_reply);
+                    if r.want_reply {
+                        let msg = if r.ty == b"shell" {
+                            // Accept request
+                            Message::Channel(Channel::Success(channel::Success {
+                                channel_a: 0,
+                            }))
+                        } else {
+                            // Reject request
+                            Message::Channel(Channel::Failure(Failure {
+                                channel_a: 0,
+                            }))
+                        };
+                        send.send(
+                            &mut pkt_buf,
+                            |buf| msg.serialize(buf).unwrap().len(),
+                            |d| c.write_all(d),
+                            &mut rng,
+                        )
+                        .unwrap();
+                    }
+                }
+                Message::Channel(Channel::Data(d)) => {
+                    dbg!(d.channel_b);
+                    dbg!(core::str::from_utf8(d.data));
+                }
+                Message::Channel(Channel::Eof(e)) => {
+                    dbg!(e.channel_a);
+                    break;
+                }
+                Message::Disconnect(d) => {
+                    dbg!(d.reason);
+                    dbg!(core::str::from_utf8(d.description));
+                    dbg!(core::str::from_utf8(d.language));
+                    break;
+                }
+                _ => todo!(),
+            }
+        }
     }
 }

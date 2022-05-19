@@ -1,7 +1,9 @@
+pub mod channel;
 mod key_exchange;
 mod service;
 pub mod userauth;
 
+pub use channel::Channel;
 pub use key_exchange::{
     KeyExchangeEcdhInit, KeyExchangeEcdhInitParseError, KeyExchangeEcdhReply, KeyExchangeInit,
     KeyExchangeInitParseError, NewKeys, NewKeysParseError,
@@ -11,15 +13,18 @@ pub use service::{
 };
 pub use userauth::UserAuth;
 
+use crate::data::parse_string;
 use core::ops::RangeInclusive;
 
 pub enum Message<'a> {
+    Disconnect(Disconnect<'a>),
     KeyExchangeInit(KeyExchangeInit<'a>),
     KeyExchangeEcdhInit(KeyExchangeEcdhInit<'a>),
     NewKeys(NewKeys),
     ServiceRequest(ServiceRequest<'a>),
     ServiceAccept(ServiceAccept<'a>),
     UserAuth(UserAuth<'a>),
+    Channel(Channel<'a>),
 }
 
 impl<'a> Message<'a> {
@@ -37,10 +42,13 @@ impl<'a> Message<'a> {
     const KEX_ECDH_REPLY: u8 = 31;
 
     const USERAUTH: RangeInclusive<u8> = 50..=79;
+    const CHANNEL: RangeInclusive<u8> = 90..=127;
 
     pub fn parse(data: &'a [u8]) -> Result<Self, MessageParseError> {
         match *data.get(0).ok_or(MessageParseError::NoMessageType)? {
-            Self::DISCONNECT => todo!(),
+            Self::DISCONNECT => Disconnect::parse(&data[1..])
+                .map(Self::Disconnect)
+                .map_err(MessageParseError::Disconnect),
             Self::IGNORE => todo!(),
             Self::UNIMPLEMENTED => todo!(),
             Self::DEBUG => todo!(),
@@ -63,6 +71,9 @@ impl<'a> Message<'a> {
             t if Self::USERAUTH.contains(&t) => UserAuth::parse(t, &data[1..])
                 .map(Self::UserAuth)
                 .map_err(MessageParseError::UserAuth),
+            t if Self::CHANNEL.contains(&t) => Channel::parse(t, &data[1..])
+                .map(Self::Channel)
+                .map_err(MessageParseError::Channel),
             ty => Err(MessageParseError::UnknownMessageType(ty)),
         }
     }
@@ -72,6 +83,7 @@ impl<'a> Message<'a> {
         F: FnMut(&[u8]) -> Result<(), R>,
     {
         match self {
+            Self::Disconnect(_) => todo!(),
             Self::KeyExchangeInit(_) => todo!(),
             Self::KeyExchangeEcdhInit(_) => todo!(),
             Self::NewKeys(NewKeys) => send(&[Self::NEWKEYS]),
@@ -84,6 +96,7 @@ impl<'a> Message<'a> {
                 s.send(send)
             }
             Self::UserAuth(ua) => ua.send(send),
+            Self::Channel(ch) => ch.send(send),
         }
     }
 
@@ -105,12 +118,14 @@ impl<'a> Message<'a> {
 pub enum MessageParseError {
     NoMessageType,
     UnknownMessageType(u8),
+    Disconnect(ParseDisconnectError),
     KeyExchangeInit(KeyExchangeInitParseError),
     KeyExchangeEcdhInit(KeyExchangeEcdhInitParseError),
     NewKeys(NewKeysParseError),
     ServiceRequest(ParseServiceRequestError),
     ServiceAccept(ParseServiceAcceptError),
     UserAuth(userauth::ParseError),
+    Channel(channel::ParseError),
 }
 
 #[derive(Debug)]
@@ -165,9 +180,40 @@ macro_rules! msg {
     };
 }
 
+msg!('a Disconnect -> as_disconnect, into_disconnect);
 msg!('a KeyExchangeInit -> as_kex_init, into_kex_init);
 msg!('a KeyExchangeEcdhInit -> as_kex_ecdh_init, into_kex_ecdh_init);
 msg!(NewKeys -> as_new_keys, into_new_keys);
 msg!('a ServiceRequest -> as_service_request, into_service_request);
 msg!('a ServiceAccept -> as_service_accept, into_service_accept);
 msg!('a UserAuth -> as_user_auth, into_user_auth);
+msg!('a Channel -> as_channel, into_channel);
+
+pub struct Disconnect<'a> {
+    pub reason: u32,
+    pub description: &'a [u8],
+    pub language: &'a [u8],
+}
+
+impl<'a> Disconnect<'a> {
+    fn parse(data: &'a [u8]) -> Result<Self, ParseDisconnectError> {
+        let reason = data.get(..4).ok_or(ParseDisconnectError::BadLength)?;
+        let description = parse_string(&data[4..]).ok_or(ParseDisconnectError::BadLength)?;
+        let data = &data[4 + 4 + description.len()..];
+        let language = parse_string(data).ok_or(ParseDisconnectError::BadLength)?;
+        if data.len() != 4 + language.len() {
+            Err(ParseDisconnectError::BadLength)
+        } else {
+            Ok(Self {
+                reason: u32::from_be_bytes(reason.try_into().unwrap()),
+                description,
+                language,
+            })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ParseDisconnectError {
+    BadLength,
+}
