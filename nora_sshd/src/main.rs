@@ -145,6 +145,7 @@ async fn handle_client(
     let mut pkt_buf = [0; 35000];
     let c = &mut io;
     let (send, recv) = client.send_receive();
+
     // Receive data
     loop {
         let data = match recv.recv(&mut pkt_buf, c).await {

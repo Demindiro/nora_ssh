@@ -1,0 +1,12 @@
+[package]
+name = "nora_sshd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-std = { version = "1.11", features = ["attributes", "unstable"] }
+rand = "0.8"
+nora_ssh = { path = "../nora_ssh" }
+futures = "0.3"
+p256 = "0.11"
+ecdsa = "0.14"
