@@ -1,12 +1,12 @@
 use crate::{
     cipher::{ChaCha20Poly1305, Cipher, Error, CIPHER_NAMES},
-    data::{make_pos_mpint, make_string, make_string_len},
+    data::{make_pos_mpint, make_string_len},
     identifier::{Identifier, ParseIdentError},
     key_exchange::{Direction, KeyMaterial, ALGORITHM_NAMES},
     message::{KeyExchangeEcdhReply, Message, MessageParseError, NewKeys},
     packet::{BlockSize, Packet, PacketParseError, WrapRawError},
 };
-use core::marker::PhantomData;
+use core::{fmt, future::Future};
 use digest::Digest;
 use ecdsa::{
     hazmat::SignPrimitive, signature::Signer, PrimeCurve, SignatureSize, SigningKey, VerifyingKey,
@@ -15,6 +15,7 @@ use elliptic_curve::{
     ops::{Invert, Reduce},
     ProjectiveArithmetic, Scalar,
 };
+use futures::io;
 use generic_array::ArrayLength;
 use rand::{CryptoRng, RngCore};
 use subtle::CtOption;
@@ -87,15 +88,13 @@ where
 }
 
 impl Host<p256::NistP256> {
-    pub fn handle_new_client<R, F, G, Rng>(
+    pub async fn handle_new_client<Io, Rng>(
         &self,
-        mut recv: F,
-        mut send: G,
+        io: &mut Io,
         mut rng: Rng,
-    ) -> Result<HostClient<crate::cipher::ChaCha20Poly1305>, HandleNewClientError<R>>
+    ) -> Result<HostClient<crate::cipher::ChaCha20Poly1305>, HandleNewClientError>
     where
-        F: FnMut(&mut [u8]) -> Result<(), R>,
-        G: FnMut(&[u8]) -> Result<(), R>,
+        Io: io::AsyncReadExt + io::AsyncWriteExt + Unpin,
         Rng: CryptoRng + RngCore,
     {
         type D = sha2::Sha256;
@@ -116,8 +115,9 @@ impl Host<p256::NistP256> {
 
         // Send identifier + kexinit
         self.identifier
-            .send(&mut send)
-            .map_err(HandleNewClientError::Other)?;
+            .send(io)
+            .await
+            .map_err(HandleNewClientError::Write)?;
         let mut host_pkt = [0; 256];
         let host_pkt = Packet::wrap(
             &mut host_pkt,
@@ -142,16 +142,20 @@ impl Host<p256::NistP256> {
             },
             &mut rng,
         );
-        send(host_pkt.as_raw()).map_err(HandleNewClientError::Other)?;
+        io.write_all(host_pkt.as_raw())
+            .await
+            .map_err(HandleNewClientError::Write)?;
 
         // Receive id + kexinit
         let mut ident = [0; Identifier::MAX_LEN];
-        let client_ident = Identifier::parse(&mut recv, &mut ident)
+        let client_ident = Identifier::parse(io, &mut ident)
+            .await
             .map_err(HandleNewClientError::ParseIdentifierError)?;
 
         update_string(&mut exchange_hash, client_ident.as_ref());
         update_string(&mut exchange_hash, self.identifier.as_ref());
-        let pkt = Packet::parse(&mut recv, &mut pkt_buf)
+        let pkt = Packet::parse(io, &mut pkt_buf)
+            .await
             .map_err(HandleNewClientError::PacketParseError)?;
         update_string(&mut exchange_hash, pkt.payload());
         update_string(&mut exchange_hash, host_pkt.payload());
@@ -183,7 +187,8 @@ impl Host<p256::NistP256> {
         let server_ephermal_public = x25519_dalek::PublicKey::from(&server_ephermal_secret);
 
         // Receive the client's temporary key
-        let pkt = Packet::parse(&mut recv, &mut pkt_buf)
+        let pkt = Packet::parse(io, &mut pkt_buf)
+            .await
             .map_err(HandleNewClientError::PacketParseError)?;
         let client_ephermal_public = Message::parse(pkt.payload())
             .unwrap()
@@ -221,7 +226,9 @@ impl Host<p256::NistP256> {
             },
             &mut rng,
         );
-        send(pkt.into_raw(0)).map_err(HandleNewClientError::Other)?;
+        io.write_all(pkt.into_raw(0))
+            .await
+            .map_err(HandleNewClientError::Write)?;
 
         let receive_cipher = In(ChaCha20Poly1305::from_key_material(
             &key_material,
@@ -242,8 +249,11 @@ impl Host<p256::NistP256> {
             |buf| Message::NewKeys(NewKeys).serialize(buf).unwrap().len(),
             &mut rng,
         );
-        send(pkt.as_raw()).map_err(HandleNewClientError::Other)?;
-        let pkt = Packet::parse(&mut recv, &mut pkt_buf)
+        io.write_all(pkt.as_raw())
+            .await
+            .map_err(HandleNewClientError::Write)?;
+        let pkt = Packet::parse(io, &mut pkt_buf)
+            .await
             .map_err(HandleNewClientError::PacketParseError)?;
         Message::parse(pkt.payload())
             .unwrap()
@@ -258,28 +268,29 @@ impl Host<p256::NistP256> {
 }
 
 #[derive(Debug)]
-pub enum HandleNewClientError<R> {
-    ParseIdentifierError(ParseIdentError<R>),
+pub enum HandleNewClientError {
+    ParseIdentifierError(ParseIdentError),
     MessageParseError(MessageParseError),
-    PacketParseError(PacketParseError<R>),
+    PacketParseError(PacketParseError),
     ExpectedKeyExchangeInit,
     UnsupportedAlgorithms,
-    Other(R),
+    Read(io::Error),
+    Write(io::Error),
 }
 
 pub struct Out<D: Cipher>(D);
 
 impl<D: Cipher> Out<D> {
-    pub fn send<R, G, F, Rng>(
+    pub async fn send<Io, F, Rng>(
         &mut self,
         buf: &mut [u8],
         mut fill: F,
-        mut send: G,
+        io: &mut Io,
         rng: Rng,
-    ) -> Result<(), OutError<R>>
+    ) -> Result<(), OutError>
     where
-        F: FnMut(&mut [u8]) -> usize,
-        G: FnMut(&[u8]) -> Result<(), R>,
+        Io: io::AsyncWriteExt + Unpin,
+        F: FnOnce(&mut [u8]) -> usize,
         Rng: CryptoRng + RngCore,
     {
         let pkt = Packet::wrap(
@@ -291,28 +302,28 @@ impl<D: Cipher> Out<D> {
         );
         let pkt = pkt.into_raw(self.0.tag_size());
         self.0.encrypt(pkt);
-        send(pkt).map_err(OutError::Send)
+        io.write_all(pkt).await.map_err(OutError::Write)
     }
 }
 
 #[derive(Debug)]
-pub enum OutError<R> {
-    Send(R),
+pub enum OutError {
+    Write(io::Error),
 }
 
 pub struct In<D: Cipher>(D);
 
 impl<D: Cipher> In<D> {
-    pub fn recv<'a, R, F>(
+    pub async fn recv<'a, Io>(
         &mut self,
         buf: &'a mut [u8],
-        mut recv: F,
-    ) -> Result<&'a mut [u8], InError<R>>
+        io: &mut Io,
+    ) -> Result<&'a mut [u8], InError>
     where
-        F: FnMut(&mut [u8]) -> Result<(), R>,
+        Io: io::AsyncReadExt + Unpin,
     {
         let (len, data) = buf.split_at_mut(4);
-        recv(len).map_err(InError::Receive)?;
+        io.read_exact(len).await.map_err(InError::Read)?;
         let lenb = self
             .0
             .decrypt_length(len.try_into().unwrap())
@@ -321,7 +332,7 @@ impl<D: Cipher> In<D> {
         let data = data
             .get_mut(..len + self.0.tag_size())
             .ok_or(InError::BufferTooSmall(len))?;
-        recv(data).map_err(InError::Receive)?;
+        io.read_exact(data).await.map_err(InError::Read)?;
         let data = &mut buf[..4 + len + self.0.tag_size()];
         self.0.decrypt_data(data).map_err(InError::Cipher)?;
         data[..4].copy_from_slice(&lenb);
@@ -332,10 +343,10 @@ impl<D: Cipher> In<D> {
 }
 
 #[derive(Debug)]
-pub enum InError<R> {
+pub enum InError {
     Packet(WrapRawError),
     BufferTooSmall(usize),
-    Receive(R),
+    Read(io::Error),
     Cipher(Error),
 }
 

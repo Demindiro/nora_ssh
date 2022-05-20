@@ -31,12 +31,8 @@ impl<'a> Channel<'a> {
             Self::OPEN_CONFIRMATION => OpenConfirmation::parse(data)
                 .map(Self::OpenConfirmation)
                 .map_err(ParseError::OpenConfirmation),
-            Self::DATA => Data::parse(data)
-                .map(Self::Data)
-                .map_err(ParseError::Data),
-            Self::EOF => Eof::parse(data)
-                .map(Self::Eof)
-                .map_err(ParseError::Eof),
+            Self::DATA => Data::parse(data).map(Self::Data).map_err(ParseError::Data),
+            Self::EOF => Eof::parse(data).map(Self::Eof).map_err(ParseError::Eof),
             Self::REQUEST => Request::parse(data)
                 .map(Self::Request)
                 .map_err(ParseError::Request),
@@ -245,10 +241,7 @@ impl<'a> Data<'a> {
         if data.len() != 4 + 4 + d.len() {
             Err(DataParseError::BadLength)
         } else {
-            Ok(Self {
-                channel_b,
-                data: d,
-            })
+            Ok(Self { channel_b, data: d })
         }
     }
 
@@ -264,7 +257,7 @@ impl<'a> Data<'a> {
 
 #[derive(Debug)]
 pub enum DataParseError {
-    BadLength
+    BadLength,
 }
 
 pub struct Request<'a> {
@@ -308,7 +301,9 @@ macro_rules! chan_only {
         impl $s {
             fn parse(data: &[u8]) -> Result<Self, $e> {
                 data.try_into()
-                    .map(|n| Self { channel_a: u32::from_be_bytes(n) })
+                    .map(|n| Self {
+                        channel_a: u32::from_be_bytes(n),
+                    })
                     .map_err(|_| $e::BadLength)
             }
 

@@ -1,3 +1,5 @@
+use core::future::Future;
+use futures::io;
 use rand::{CryptoRng, RngCore};
 
 pub struct Packet<'a> {
@@ -80,12 +82,14 @@ impl<'a> Packet<'a> {
         }
     }
 
-    pub fn parse<R, F>(mut read: F, buf: &'a mut [u8]) -> Result<Self, PacketParseError<R>>
+    // Can't use Self because the compiler is retarded.
+    pub async fn parse<Io>(io: &mut Io, buf: &'a mut [u8]) -> Result<Packet<'a>, PacketParseError>
     where
-        F: FnMut(&mut [u8]) -> Result<(), R>,
+        Io: io::AsyncReadExt + Unpin,
     {
-        let mut read = move |b: &mut _| read(b).map_err(PacketParseError::Other);
-        read(&mut buf[..4])?;
+        io.read_exact(&mut buf[..4])
+            .await
+            .map_err(PacketParseError::Io)?;
         let len = u32::from_be_bytes(buf[..4].try_into().unwrap())
             .try_into()
             .unwrap();
@@ -94,7 +98,9 @@ impl<'a> Packet<'a> {
         } else if len < 8 {
             return Err(PacketParseError::TooSmall(len));
         }
-        read(&mut buf[4..][..len])?;
+        io.read_exact(&mut buf[4..][..len])
+            .await
+            .map_err(PacketParseError::Io)?;
         Ok(Self { data: buf })
     }
 
@@ -127,10 +133,10 @@ impl<'a> Packet<'a> {
 }
 
 #[derive(Debug)]
-pub enum PacketParseError<R> {
+pub enum PacketParseError {
     TooLarge(usize),
     TooSmall(usize),
-    Other(R),
+    Io(io::Error),
 }
 
 #[derive(Clone, Copy)]

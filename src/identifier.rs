@@ -1,3 +1,6 @@
+use core::{future::Future, slice};
+use futures::io;
+
 #[derive(Clone, Copy)]
 pub struct Identifier<'a>(&'a [u8]);
 
@@ -8,14 +11,14 @@ impl<'a> Identifier<'a> {
         (ident.len() <= Self::MAX_LEN).then(|| Self(ident))
     }
 
-    pub fn parse<R, F>(mut read: F, buf: &'a mut [u8; 253]) -> Result<Self, ParseIdentError<R>>
+    // We can't use Self because the compiler is retarded.
+    pub async fn parse<Io>(
+        io: &mut Io,
+        buf: &'a mut [u8; 253],
+    ) -> Result<Identifier<'a>, ParseIdentError>
     where
-        F: FnMut(&mut [u8]) -> Result<(), R>,
+        Io: io::AsyncReadExt + Unpin,
     {
-        let mut read = || {
-            let mut b = [0];
-            read(&mut b).map(|()| b[0]).map_err(ParseIdentError::Other)
-        };
         // SSH-protoversion-softwareversion SP comments CR LF
         // protocol version MUST be "2.0"
 
@@ -30,7 +33,11 @@ impl<'a> Identifier<'a> {
         }
         let mut state = State::EolLf;
         loop {
-            state = match (state, read()?) {
+            let mut b = 0;
+            io.read_exact(slice::from_mut(&mut b))
+                .await
+                .map_err(ParseIdentError::Io)?;
+            state = match (state, b) {
                 (State::EolLf, b'S') => State::S,
                 (State::S, b'S') => State::SS,
                 (State::SS, b'S') => State::SS,
@@ -43,7 +50,9 @@ impl<'a> Identifier<'a> {
         }
 
         // Match "2.0" as protocol
-        match [read()?, read()?, read()?, read()?] {
+        let mut b = [0; 4];
+        io.read_exact(&mut b).await.map_err(ParseIdentError::Io)?;
+        match b {
             [b'2', b'.', b'0', b'-'] => {}
             _ => return Err(ParseIdentError::IncompatibleProtocol),
         }
@@ -60,7 +69,11 @@ impl<'a> Identifier<'a> {
         };
         b"SSH-2.0-".iter().copied().try_for_each(&mut push)?;
         loop {
-            got_cr = match (got_cr, read()?) {
+            let mut b = 0;
+            io.read_exact(slice::from_mut(&mut b))
+                .await
+                .map_err(ParseIdentError::Io)?;
+            got_cr = match (got_cr, b) {
                 (false, b'\r') => true,
                 (true, b'\r') => {
                     push(b'\r')?;
@@ -82,12 +95,12 @@ impl<'a> Identifier<'a> {
         Ok(Self(&buf[..i]))
     }
 
-    pub fn send<R, F>(self, mut send: F) -> Result<(), R>
+    pub async fn send<Io>(self, io: &mut Io) -> Result<(), io::Error>
     where
-        F: FnMut(&[u8]) -> Result<(), R>,
+        Io: io::AsyncWriteExt + Unpin,
     {
-        send(self.0)?;
-        send(b"\r\n")
+        io.write_all(self.0).await?;
+        io.write_all(b"\r\n").await
     }
 }
 
@@ -98,8 +111,8 @@ impl AsRef<[u8]> for Identifier<'_> {
 }
 
 #[derive(Debug)]
-pub enum ParseIdentError<R> {
+pub enum ParseIdentError {
     IdentifierTooLong,
     IncompatibleProtocol,
-    Other(R),
+    Io(io::Error),
 }
