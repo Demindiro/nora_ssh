@@ -1,4 +1,4 @@
-use crate::data::parse_string;
+use crate::data::{parse_string, parse_string2};
 
 pub enum UserAuth<'a> {
     Request(Request<'a>),
@@ -144,7 +144,7 @@ pub struct Failure<'a> {
 
 impl<'a> Failure<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, FailureParseError> {
-        todo!()
+        let (message, i) = parse_string2(data).ok_or(BannerParseError::Truncated)?;
     }
 }
 
@@ -158,10 +158,7 @@ pub struct Success;
 
 impl Success {
     fn parse(data: &[u8]) -> Result<Self, SuccessParseError> {
-        match data {
-            &[] => Ok(Self),
-            _ => Err(SuccessParseError::Unread),
-        }
+        data.is_empty().then(|| Self).ok_or(SuccessParseError::Unread)
     }
 }
 
@@ -171,13 +168,15 @@ pub enum SuccessParseError {
 }
 
 pub struct Banner<'a> {
-    message: &'a [u8],
-    language: &'a [u8],
+    pub message: &'a [u8],
+    pub language: &'a [u8],
 }
 
 impl<'a> Banner<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, BannerParseError> {
-        todo!()
+        let (message, i) = parse_string2(data).ok_or(BannerParseError::Truncated)?;
+        let (language, i) = parse_string2(&data[i..]).ok_or(BannerParseError::Truncated)?;
+        (i == data.len()).then(|| Self { message, language }).ok_or(BannerParseError::Unread)
     }
 }
 

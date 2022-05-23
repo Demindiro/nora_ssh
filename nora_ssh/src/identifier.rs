@@ -1,5 +1,4 @@
-use core::{future::Future, slice};
-use futures::io;
+use core::slice;
 
 #[derive(Clone, Copy)]
 pub struct Identifier<'a>(&'a [u8]);
