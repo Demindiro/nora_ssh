@@ -10,3 +10,4 @@ nora_ssh = { path = "../nora_ssh" }
 futures = "0.3"
 p256 = "0.11"
 ecdsa = "0.14"
+async-trait = "0.1"

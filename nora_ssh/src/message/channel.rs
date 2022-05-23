@@ -147,7 +147,7 @@ ch_as!(Failure -> as_failure, into_failure);
 
 pub struct Open<'a> {
     pub ty: &'a [u8],
-    pub channel_a: u32,
+    pub sender_channel: u32,
     pub window_size: u32,
     pub max_packet_size: u32,
 }
@@ -161,12 +161,12 @@ impl<'a> Open<'a> {
         } else if data.len() > 12 {
             Err(OpenParseError::Unread)
         } else {
-            let channel_a = u32::from_be_bytes(data[..4].try_into().unwrap());
+            let sender_channel = u32::from_be_bytes(data[..4].try_into().unwrap());
             let window_size = u32::from_be_bytes(data[4..8].try_into().unwrap());
             let max_packet_size = u32::from_be_bytes(data[8..].try_into().unwrap());
             Ok(Self {
                 ty,
-                channel_a,
+                sender_channel,
                 window_size,
                 max_packet_size,
             })
@@ -181,8 +181,8 @@ pub enum OpenParseError {
 }
 
 pub struct OpenConfirmation<'a> {
-    pub channel_a: u32,
-    pub channel_b: u32,
+    pub recipient_channel: u32,
+    pub sender_channel: u32,
     pub window_size: u32,
     pub max_packet_size: u32,
     pub stuff: &'a [u8],
@@ -193,13 +193,13 @@ impl<'a> OpenConfirmation<'a> {
         if data.len() < 16 {
             Err(OpenConfirmationParseError::Truncated)
         } else {
-            let channel_a = u32::from_be_bytes(data[..4].try_into().unwrap());
-            let channel_b = u32::from_be_bytes(data[4..8].try_into().unwrap());
+            let recipient_channel = u32::from_be_bytes(data[..4].try_into().unwrap());
+            let sender_channel = u32::from_be_bytes(data[4..8].try_into().unwrap());
             let window_size = u32::from_be_bytes(data[8..12].try_into().unwrap());
             let max_packet_size = u32::from_be_bytes(data[12..16].try_into().unwrap());
             Ok(Self {
-                channel_a,
-                channel_b,
+                recipient_channel,
+                sender_channel,
                 window_size,
                 max_packet_size,
                 stuff: &data[16..],
@@ -211,8 +211,8 @@ impl<'a> OpenConfirmation<'a> {
     where
         F: FnMut(&[u8]) -> Result<(), R>,
     {
-        send(&self.channel_a.to_be_bytes())?;
-        send(&self.channel_b.to_be_bytes())?;
+        send(&self.recipient_channel.to_be_bytes())?;
+        send(&self.sender_channel.to_be_bytes())?;
         send(&self.window_size.to_be_bytes())?;
         send(&self.max_packet_size.to_be_bytes())?;
         send(&self.stuff)
@@ -225,13 +225,13 @@ pub enum OpenConfirmationParseError {
 }
 
 pub struct Data<'a> {
-    pub channel_b: u32,
+    pub recipient_channel: u32,
     pub data: &'a [u8],
 }
 
 impl<'a> Data<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, DataParseError> {
-        let channel_b = u32::from_be_bytes(
+        let recipient_channel = u32::from_be_bytes(
             data.get(..4)
                 .ok_or(DataParseError::BadLength)?
                 .try_into()
@@ -241,7 +241,10 @@ impl<'a> Data<'a> {
         if data.len() != 4 + 4 + d.len() {
             Err(DataParseError::BadLength)
         } else {
-            Ok(Self { channel_b, data: d })
+            Ok(Self {
+                recipient_channel,
+                data: d,
+            })
         }
     }
 
@@ -249,7 +252,7 @@ impl<'a> Data<'a> {
     where
         F: FnMut(&[u8]) -> Result<(), R>,
     {
-        send(&self.channel_b.to_be_bytes())?;
+        send(&self.recipient_channel.to_be_bytes())?;
         send(&make_string_len(self.data))?;
         send(self.data)
     }
@@ -261,7 +264,7 @@ pub enum DataParseError {
 }
 
 pub struct Request<'a> {
-    pub channel_b: u32,
+    pub recipient_channel: u32,
     pub ty: &'a [u8],
     pub want_reply: bool,
     pub stuff: &'a [u8],
@@ -269,7 +272,7 @@ pub struct Request<'a> {
 
 impl<'a> Request<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, RequestParseError> {
-        let channel_b = u32::from_be_bytes(
+        let recipient_channel = u32::from_be_bytes(
             data.get(..4)
                 .ok_or(RequestParseError::Truncated)?
                 .try_into()
@@ -279,7 +282,7 @@ impl<'a> Request<'a> {
         let data = &data[4 + 4 + ty.len()..];
         let want_reply = *data.get(0).ok_or(RequestParseError::Truncated)? != 0;
         Ok(Self {
-            channel_b,
+            recipient_channel,
             ty,
             want_reply,
             stuff: &data[1..],
@@ -295,14 +298,14 @@ pub enum RequestParseError {
 macro_rules! chan_only {
     ($s:ident ? $e:ident) => {
         pub struct $s {
-            pub channel_a: u32,
+            pub recipient_channel: u32,
         }
 
         impl $s {
             fn parse(data: &[u8]) -> Result<Self, $e> {
                 data.try_into()
                     .map(|n| Self {
-                        channel_a: u32::from_be_bytes(n),
+                        recipient_channel: u32::from_be_bytes(n),
                     })
                     .map_err(|_| $e::BadLength)
             }
@@ -311,7 +314,7 @@ macro_rules! chan_only {
             where
                 F: FnMut(&[u8]) -> Result<(), R>,
             {
-                send(&self.channel_a.to_be_bytes())
+                send(&self.recipient_channel.to_be_bytes())
             }
         }
 

@@ -1,2 +1,5 @@
 [workspace]
 members = [ "nora_ssh", "nora_sshd" ]
+
+[profile.release]
+lto = "fat"

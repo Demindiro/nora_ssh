@@ -15,14 +15,17 @@ use elliptic_curve::{
     ops::{Invert, Reduce},
     ProjectiveArithmetic, Scalar,
 };
-use futures::io;
+use futures::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use generic_array::ArrayLength;
 use rand::{CryptoRng, RngCore};
 use subtle::CtOption;
 
 pub trait SignKey
 where
-    Self: PrimeCurve + ProjectiveArithmetic,
+    Self: PrimeCurve + ProjectiveArithmetic + Clone,
+    Scalar<Self>:
+        Invert<Output = CtOption<Scalar<Self>>> + Reduce<Self::UInt> + SignPrimitive<Self>,
+    SignatureSize<Self>: ArrayLength<u8>,
 {
     fn name() -> &'static str;
 }
@@ -88,13 +91,15 @@ where
 }
 
 impl Host<p256::NistP256> {
-    pub async fn handle_new_client<Io, Rng>(
+    pub async fn handle_new_client<Read, Write, Rng>(
         &self,
-        io: &mut Io,
+        read: &mut Read,
+        write: &mut Write,
         mut rng: Rng,
     ) -> Result<HostClient<crate::cipher::ChaCha20Poly1305>, HandleNewClientError>
     where
-        Io: io::AsyncReadExt + io::AsyncWriteExt + Unpin,
+        Read: AsyncRead + Unpin,
+        Write: AsyncWrite + Unpin,
         Rng: CryptoRng + RngCore,
     {
         type D = sha2::Sha256;
@@ -115,7 +120,7 @@ impl Host<p256::NistP256> {
 
         // Send identifier + kexinit
         self.identifier
-            .send(io)
+            .send(write)
             .await
             .map_err(HandleNewClientError::Write)?;
         let mut host_pkt = [0; 256];
@@ -142,19 +147,20 @@ impl Host<p256::NistP256> {
             },
             &mut rng,
         );
-        io.write_all(host_pkt.as_raw())
+        write
+            .write_all(host_pkt.as_raw())
             .await
             .map_err(HandleNewClientError::Write)?;
 
         // Receive id + kexinit
         let mut ident = [0; Identifier::MAX_LEN];
-        let client_ident = Identifier::parse(io, &mut ident)
+        let client_ident = Identifier::parse(read, &mut ident)
             .await
             .map_err(HandleNewClientError::ParseIdentifierError)?;
 
         update_string(&mut exchange_hash, client_ident.as_ref());
         update_string(&mut exchange_hash, self.identifier.as_ref());
-        let pkt = Packet::parse(io, &mut pkt_buf)
+        let pkt = Packet::parse(read, &mut pkt_buf)
             .await
             .map_err(HandleNewClientError::PacketParseError)?;
         update_string(&mut exchange_hash, pkt.payload());
@@ -187,7 +193,7 @@ impl Host<p256::NistP256> {
         let server_ephermal_public = x25519_dalek::PublicKey::from(&server_ephermal_secret);
 
         // Receive the client's temporary key
-        let pkt = Packet::parse(io, &mut pkt_buf)
+        let pkt = Packet::parse(read, &mut pkt_buf)
             .await
             .map_err(HandleNewClientError::PacketParseError)?;
         let client_ephermal_public = Message::parse(pkt.payload())
@@ -226,7 +232,8 @@ impl Host<p256::NistP256> {
             },
             &mut rng,
         );
-        io.write_all(pkt.into_raw(0))
+        write
+            .write_all(pkt.into_raw(0))
             .await
             .map_err(HandleNewClientError::Write)?;
 
@@ -249,10 +256,11 @@ impl Host<p256::NistP256> {
             |buf| Message::NewKeys(NewKeys).serialize(buf).unwrap().len(),
             &mut rng,
         );
-        io.write_all(pkt.as_raw())
+        write
+            .write_all(pkt.as_raw())
             .await
             .map_err(HandleNewClientError::Write)?;
-        let pkt = Packet::parse(io, &mut pkt_buf)
+        let pkt = Packet::parse(read, &mut pkt_buf)
             .await
             .map_err(HandleNewClientError::PacketParseError)?;
         Message::parse(pkt.payload())
@@ -284,12 +292,12 @@ impl<D: Cipher> Out<D> {
     pub async fn send<Io, F, Rng>(
         &mut self,
         buf: &mut [u8],
-        mut fill: F,
+        fill: F,
         io: &mut Io,
         rng: Rng,
     ) -> Result<(), OutError>
     where
-        Io: io::AsyncWriteExt + Unpin,
+        Io: AsyncWrite + Unpin,
         F: FnOnce(&mut [u8]) -> usize,
         Rng: CryptoRng + RngCore,
     {
@@ -314,13 +322,13 @@ pub enum OutError {
 pub struct In<D: Cipher>(D);
 
 impl<D: Cipher> In<D> {
-    pub async fn recv<'a, Io>(
-        &mut self,
+    pub async fn recv<'s, 'a: 's, 'b: 's, Io>(
+        &'s mut self,
         buf: &'a mut [u8],
-        io: &mut Io,
+        io: &'b mut Io,
     ) -> Result<&'a mut [u8], InError>
     where
-        Io: io::AsyncReadExt + Unpin,
+        Io: AsyncReadExt + Unpin,
     {
         let (len, data) = buf.split_at_mut(4);
         io.read_exact(len).await.map_err(InError::Read)?;
@@ -358,6 +366,10 @@ pub struct HostClient<D: Cipher> {
 impl<D: Cipher> HostClient<D> {
     pub fn send_receive(&mut self) -> (&mut Out<D>, &mut In<D>) {
         (&mut self.send_cipher, &mut self.receive_cipher)
+    }
+
+    pub fn into_send_receive(self) -> (Out<D>, In<D>) {
+        (self.send_cipher, self.receive_cipher)
     }
 }
 
