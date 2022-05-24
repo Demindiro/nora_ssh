@@ -8,6 +8,9 @@
 //! [RFC 8731]: https://www.ietf.org/rfc/rfc8731.html
 
 #![cfg_attr(not(test), no_std)]
+// TODO there is one piece of code in key_exchange.rs that can _probably_ be written
+// in an entirely safe way.
+//#![forbid(unsafe_code)]
 
 pub mod cipher;
 pub mod client;

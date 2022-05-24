@@ -95,22 +95,30 @@ impl<'a> Message<'a> {
                 send(&[Self::SERVICE_ACCEPT])?;
                 s.send(send)
             }
-            Self::UserAuth(ua) => ua.send(send),
+            Self::UserAuth(ua) => unimplemented!("deprecate send"),
             Self::Channel(ch) => ch.send(send),
         }
     }
 
     pub fn serialize<'s>(&self, buf: &'s mut [u8]) -> Result<&'s mut [u8], Full> {
-        let mut i = 0;
-        self.send(|d| {
-            buf.get_mut(i..i + d.len())
-                .map(|w| {
-                    w.copy_from_slice(d);
-                    i += d.len();
-                })
-                .ok_or(Full)
-        })
-        .map(|()| &mut buf[..i])
+        match self {
+            Self::UserAuth(ua) => ua.serialize(buf),
+            _ => {
+                let mut i = 0;
+                return self
+                    .send(|d| {
+                        buf.get_mut(i..i + d.len())
+                            .map(|w| {
+                                w.copy_from_slice(d);
+                                i += d.len();
+                            })
+                            .ok_or(Full)
+                    })
+                    .map(|()| &mut buf[..i]);
+            }
+        }
+        .map(|i| &mut buf[..i])
+        .ok_or(Full)
     }
 }
 
