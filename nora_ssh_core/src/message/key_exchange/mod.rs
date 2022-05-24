@@ -1,38 +1,44 @@
 mod ecdh;
 
-pub use ecdh::{KeyExchangeEcdhInit, KeyExchangeEcdhInitParseError, KeyExchangeEcdhReply};
+pub use ecdh::{
+    KeyExchangeEcdhInit, KeyExchangeEcdhInitParseError, KeyExchangeEcdhReply,
+    KeyExchangeEcdhReplyParseError,
+};
 
 use super::Message;
-use crate::data::{make_pos_mpint, make_string, name_list, parse_string, split};
+use crate::data::{
+    make_bool, make_pos_mpint, make_raw, make_string, make_string2, name_list, parse_string, split,
+    InvalidNameList, NameList,
+};
 
 pub struct KeyExchangeInit<'a> {
-    kex_algorithms: &'a [u8],
-    server_host_key_algorithms: &'a [u8],
-    encryption_algorithms_client_to_server: &'a [u8],
-    encryption_algorithms_server_to_client: &'a [u8],
-    mac_algorithms_client_to_server: &'a [u8],
-    mac_algorithms_server_to_client: &'a [u8],
-    compression_algorithms_client_to_server: &'a [u8],
-    compression_algorithms_server_to_client: &'a [u8],
-    languages_client_to_server: &'a [u8],
-    languages_server_to_client: &'a [u8],
-    first_kex_packet_follows: bool,
-}
-
-macro_rules! name_list {
-    ($v:ident) => {
-        pub fn $v(&self) -> impl Iterator<Item = &'a [u8]> {
-            self.$v.split(|&c| c == b',')
-        }
-    };
+    pub cookie: &'a [u8; 16],
+    pub kex_algorithms: NameList<'a>,
+    pub server_host_key_algorithms: NameList<'a>,
+    pub encryption_algorithms_client_to_server: NameList<'a>,
+    pub encryption_algorithms_server_to_client: NameList<'a>,
+    pub mac_algorithms_client_to_server: NameList<'a>,
+    pub mac_algorithms_server_to_client: NameList<'a>,
+    pub compression_algorithms_client_to_server: NameList<'a>,
+    pub compression_algorithms_server_to_client: NameList<'a>,
+    pub languages_client_to_server: NameList<'a>,
+    pub languages_server_to_client: NameList<'a>,
+    pub first_kex_packet_follows: bool,
 }
 
 impl<'a> KeyExchangeInit<'a> {
-    pub fn parse(data: &'a [u8]) -> Result<Self, KeyExchangeInitParseError> {
+    pub(super) fn parse(data: &'a [u8]) -> Result<Self, KeyExchangeInitParseError> {
         // Skip cookie
         let split = |data, i| split(data, i).ok_or(KeyExchangeInitParseError::Truncated);
-        let name_list = |data| name_list(data).ok_or(KeyExchangeInitParseError::Truncated);
-        let (_cookie, data) = split(data, 16)?;
+        let name_list = |data| {
+            name_list(data)
+                .ok_or(KeyExchangeInitParseError::Truncated)
+                .and_then(|(list, data)| {
+                    list.map(|list| (list, data))
+                        .map_err(KeyExchangeInitParseError::InvalidNameList)
+                })
+        };
+        let (cookie, data) = split(data, 16)?;
         let (kex_algorithms, data) = name_list(data)?;
         let (server_host_key_algorithms, data) = name_list(data)?;
         let (encryption_algorithms_client_to_server, data) = name_list(data)?;
@@ -53,6 +59,7 @@ impl<'a> KeyExchangeInit<'a> {
             return Err(KeyExchangeInitParseError::Unread);
         }
         Ok(Self {
+            cookie: cookie.try_into().unwrap(),
             kex_algorithms,
             server_host_key_algorithms,
             encryption_algorithms_client_to_server,
@@ -67,87 +74,21 @@ impl<'a> KeyExchangeInit<'a> {
         })
     }
 
-    fn send<R, F>(&self, mut send: F) -> Result<(), R>
-    where
-        F: FnMut(&[u8]) -> Result<(), R>,
-    {
-        let mut send = |data: &[u8]| {
-            send(&u32::try_from(data.len()).unwrap().to_be_bytes())?;
-            send(data)
-        };
-        // FIXME cookie has to be randomized
-        send(&[Message::KEXINIT])?;
-        send(&[0; 16])?;
-        send(self.kex_algorithms)?;
-        send(self.server_host_key_algorithms)?;
-        send(self.encryption_algorithms_client_to_server)?;
-        send(self.encryption_algorithms_server_to_client)?;
-        send(self.mac_algorithms_client_to_server)?;
-        send(self.mac_algorithms_server_to_client)?;
-        send(self.compression_algorithms_client_to_server)?;
-        send(self.compression_algorithms_server_to_client)?;
-        send(self.languages_client_to_server)?;
-        send(self.languages_server_to_client)?;
-        send(&[u8::from(self.first_kex_packet_follows), 0, 0, 0, 0])
+    pub(super) fn serialize(&self, buf: &mut [u8]) -> Option<usize> {
+        let (a, buf) = make_raw(buf, self.cookie)?;
+        let (b, buf) = make_string2(buf, self.kex_algorithms.into())?;
+        let (c, buf) = make_string2(buf, self.server_host_key_algorithms.into())?;
+        let (d, buf) = make_string2(buf, self.encryption_algorithms_client_to_server.into())?;
+        let (e, buf) = make_string2(buf, self.encryption_algorithms_server_to_client.into())?;
+        let (f, buf) = make_string2(buf, self.mac_algorithms_client_to_server.into())?;
+        let (g, buf) = make_string2(buf, self.mac_algorithms_server_to_client.into())?;
+        let (h, buf) = make_string2(buf, self.compression_algorithms_client_to_server.into())?;
+        let (i, buf) = make_string2(buf, self.compression_algorithms_server_to_client.into())?;
+        let (j, buf) = make_string2(buf, self.languages_client_to_server.into())?;
+        let (k, buf) = make_string2(buf, self.languages_server_to_client.into())?;
+        let (l, _) = make_bool(buf, self.first_kex_packet_follows)?;
+        Some(a + b + c + d + e + f + g + h + i + j + k)
     }
-
-    pub fn new_payload<'i>(
-        buf: &mut [u8],
-        kex_algorithms: impl Iterator<Item = &'i str>,
-        server_host_key_algorithms: impl Iterator<Item = &'i str>,
-        encryption_algorithms_client_to_server: impl Iterator<Item = &'i str>,
-        encryption_algorithms_server_to_client: impl Iterator<Item = &'i str>,
-        mac_algorithms_client_to_server: impl Iterator<Item = &'i str>,
-        mac_algorithms_server_to_client: impl Iterator<Item = &'i str>,
-        compression_algorithms_client_to_server: impl Iterator<Item = &'i str>,
-        compression_algorithms_server_to_client: impl Iterator<Item = &'i str>,
-        languages_client_to_server: impl Iterator<Item = &'i str>,
-        languages_server_to_client: impl Iterator<Item = &'i str>,
-    ) -> (&mut [u8], &mut [u8]) {
-        fn name_list<'j>(buf: &mut [u8], iter: impl Iterator<Item = &'j str>, none: bool) -> usize {
-            let (len, buf) = buf.split_at_mut(4);
-            let mut i = 0;
-            let mut push = |b| {
-                buf[i] = b;
-                i += 1;
-            };
-            for (i, s) in iter.enumerate() {
-                (i != 0).then(|| push(b','));
-                s.bytes().for_each(|c| push(c));
-            }
-            if none && i == 0 {
-                buf[..4].copy_from_slice(b"none");
-                i = 4;
-            }
-            len.copy_from_slice(&u32::try_from(i).unwrap().to_be_bytes());
-            4 + i
-        }
-        buf[0] = Message::KEXINIT;
-        let i = 17; // message type + cookie
-        let i = name_list(&mut buf[i..], kex_algorithms, true) + i;
-        let i = name_list(&mut buf[i..], server_host_key_algorithms, true) + i;
-        let i = name_list(&mut buf[i..], encryption_algorithms_client_to_server, true) + i;
-        let i = name_list(&mut buf[i..], encryption_algorithms_server_to_client, true) + i;
-        let i = name_list(&mut buf[i..], mac_algorithms_client_to_server, true) + i;
-        let i = name_list(&mut buf[i..], mac_algorithms_server_to_client, true) + i;
-        let i = name_list(&mut buf[i..], compression_algorithms_client_to_server, true) + i;
-        let i = name_list(&mut buf[i..], compression_algorithms_server_to_client, true) + i;
-        let i = name_list(&mut buf[i..], languages_client_to_server, false) + i;
-        let i = name_list(&mut buf[i..], languages_server_to_client, false) + i;
-        buf[i..i + 5].copy_from_slice(&[0; 5]); // guess + zero
-        buf.split_at_mut(i + 5)
-    }
-
-    name_list!(kex_algorithms);
-    name_list!(server_host_key_algorithms);
-    name_list!(encryption_algorithms_client_to_server);
-    name_list!(encryption_algorithms_server_to_client);
-    name_list!(mac_algorithms_client_to_server);
-    name_list!(mac_algorithms_server_to_client);
-    name_list!(compression_algorithms_client_to_server);
-    name_list!(compression_algorithms_server_to_client);
-    name_list!(languages_client_to_server);
-    name_list!(languages_server_to_client);
 }
 
 #[derive(Debug)]
@@ -155,15 +96,20 @@ pub enum KeyExchangeInitParseError {
     Truncated,
     NoTrailingZero,
     Unread,
+    InvalidNameList(InvalidNameList),
 }
 
 pub struct NewKeys;
 
 impl NewKeys {
-    pub fn parse(data: &[u8]) -> Result<Self, NewKeysParseError> {
+    pub(super) fn parse(data: &[u8]) -> Result<Self, NewKeysParseError> {
         (data.len() == 0)
             .then(|| Self)
             .ok_or(NewKeysParseError::Unread)
+    }
+
+    pub(super) fn serialize(&self, _buf: &mut [u8]) -> Option<usize> {
+        Some(0)
     }
 }
 

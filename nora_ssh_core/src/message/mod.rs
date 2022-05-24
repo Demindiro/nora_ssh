@@ -5,21 +5,28 @@ pub mod userauth;
 
 pub use channel::Channel;
 pub use key_exchange::{
-    KeyExchangeEcdhInit, KeyExchangeEcdhInitParseError, KeyExchangeEcdhReply, KeyExchangeInit,
-    KeyExchangeInitParseError, NewKeys, NewKeysParseError,
+    KeyExchangeEcdhInit, KeyExchangeEcdhInitParseError, KeyExchangeEcdhReply,
+    KeyExchangeEcdhReplyParseError, KeyExchangeInit, KeyExchangeInitParseError, NewKeys,
+    NewKeysParseError,
 };
 pub use service::{
     ParseServiceAcceptError, ParseServiceRequestError, ServiceAccept, ServiceRequest,
 };
 pub use userauth::UserAuth;
 
-use crate::data::parse_string;
+use crate::data::{
+    make_bool, make_string2, make_uint32, parse_bool, parse_string, parse_string3, parse_uint32,
+};
 use core::ops::RangeInclusive;
 
 pub enum Message<'a> {
     Disconnect(Disconnect<'a>),
+    Ignore(Ignore<'a>),
+    Unimplemented(Unimplemented),
+    Debug(Debug<'a>),
     KeyExchangeInit(KeyExchangeInit<'a>),
     KeyExchangeEcdhInit(KeyExchangeEcdhInit<'a>),
+    KeyExchangeEcdhReply(KeyExchangeEcdhReply<'a>),
     NewKeys(NewKeys),
     ServiceRequest(ServiceRequest<'a>),
     ServiceAccept(ServiceAccept<'a>),
@@ -49,9 +56,15 @@ impl<'a> Message<'a> {
             Self::DISCONNECT => Disconnect::parse(&data[1..])
                 .map(Self::Disconnect)
                 .map_err(MessageParseError::Disconnect),
-            Self::IGNORE => todo!(),
-            Self::UNIMPLEMENTED => todo!(),
-            Self::DEBUG => todo!(),
+            Self::IGNORE => Ignore::parse(&data[1..])
+                .map(Self::Ignore)
+                .map_err(MessageParseError::Ignore),
+            Self::UNIMPLEMENTED => Unimplemented::parse(&data[1..])
+                .map(Self::Unimplemented)
+                .map_err(MessageParseError::Unimplemented),
+            Self::DEBUG => Debug::parse(&data[1..])
+                .map(Self::Debug)
+                .map_err(MessageParseError::Debug),
             Self::SERVICE_REQUEST => ServiceRequest::parse(&data[1..])
                 .map(Self::ServiceRequest)
                 .map_err(MessageParseError::ServiceRequest),
@@ -67,7 +80,9 @@ impl<'a> Message<'a> {
             Self::KEX_ECDH_INIT => KeyExchangeEcdhInit::parse(&data[1..])
                 .map(Self::KeyExchangeEcdhInit)
                 .map_err(MessageParseError::KeyExchangeEcdhInit),
-            Self::KEX_ECDH_REPLY => todo!(),
+            Self::KEX_ECDH_REPLY => KeyExchangeEcdhReply::parse(&data[1..])
+                .map(Self::KeyExchangeEcdhReply)
+                .map_err(MessageParseError::KeyExchangeEcdhReply),
             t if Self::USERAUTH.contains(&t) => UserAuth::parse(t, &data[1..])
                 .map(Self::UserAuth)
                 .map_err(MessageParseError::UserAuth),
@@ -78,47 +93,27 @@ impl<'a> Message<'a> {
         }
     }
 
-    pub fn send<R, F>(&self, mut send: F) -> Result<(), R>
-    where
-        F: FnMut(&[u8]) -> Result<(), R>,
-    {
-        match self {
-            Self::Disconnect(_) => todo!(),
-            Self::KeyExchangeInit(_) => todo!(),
-            Self::KeyExchangeEcdhInit(_) => todo!(),
-            Self::NewKeys(NewKeys) => send(&[Self::NEWKEYS]),
-            Self::ServiceRequest(s) => {
-                send(&[Self::SERVICE_REQUEST])?;
-                s.send(send)
-            }
-            Self::ServiceAccept(s) => {
-                send(&[Self::SERVICE_ACCEPT])?;
-                s.send(send)
-            }
-            _ => unimplemented!("deprecate send"),
+    pub fn serialize<'s>(&self, buf: &'s mut [u8]) -> Option<(&'s mut [u8], &'s mut [u8])> {
+        fn f<F: FnOnce(&mut [u8]) -> Option<usize>>(ty: u8, buf: &mut [u8], f: F) -> Option<usize> {
+            let (t, buf) = buf.split_first_mut()?;
+            *t = ty;
+            f(buf).map(|i| i + 1)
         }
-    }
-
-    pub fn serialize<'s>(&self, buf: &'s mut [u8]) -> Result<&'s mut [u8], Full> {
         match self {
+            Self::Disconnect(o) => f(Self::DISCONNECT, buf, |buf| o.serialize(buf)),
+            Self::Ignore(o) => f(Self::IGNORE, buf, |buf| o.serialize(buf)),
+            Self::Unimplemented(o) => f(Self::UNIMPLEMENTED, buf, |buf| o.serialize(buf)),
+            Self::Debug(o) => f(Self::DEBUG, buf, |buf| o.serialize(buf)),
+            Self::ServiceRequest(o) => f(Self::SERVICE_REQUEST, buf, |buf| o.serialize(buf)),
+            Self::ServiceAccept(o) => f(Self::SERVICE_ACCEPT, buf, |buf| o.serialize(buf)),
+            Self::KeyExchangeInit(o) => f(Self::KEXINIT, buf, |buf| o.serialize(buf)),
+            Self::NewKeys(o) => f(Self::NEWKEYS, buf, |buf| o.serialize(buf)),
+            Self::KeyExchangeEcdhInit(o) => f(Self::KEX_ECDH_INIT, buf, |buf| o.serialize(buf)),
+            Self::KeyExchangeEcdhReply(o) => f(Self::KEX_ECDH_REPLY, buf, |buf| o.serialize(buf)),
             Self::UserAuth(o) => o.serialize(buf),
             Self::Channel(o) => o.serialize(buf),
-            _ => {
-                let mut i = 0;
-                return self
-                    .send(|d| {
-                        buf.get_mut(i..i + d.len())
-                            .map(|w| {
-                                w.copy_from_slice(d);
-                                i += d.len();
-                            })
-                            .ok_or(Full)
-                    })
-                    .map(|()| &mut buf[..i]);
-            }
         }
-        .map(|i| &mut buf[..i])
-        .ok_or(Full)
+        .map(|i| buf.split_at_mut(i))
     }
 }
 
@@ -126,18 +121,19 @@ impl<'a> Message<'a> {
 pub enum MessageParseError {
     NoMessageType,
     UnknownMessageType(u8),
-    Disconnect(ParseDisconnectError),
+    Disconnect(DisconnectParseError),
+    Ignore(IgnoreParseError),
+    Unimplemented(UnimplementedParseError),
+    Debug(DebugParseError),
     KeyExchangeInit(KeyExchangeInitParseError),
-    KeyExchangeEcdhInit(KeyExchangeEcdhInitParseError),
     NewKeys(NewKeysParseError),
+    KeyExchangeEcdhInit(KeyExchangeEcdhInitParseError),
+    KeyExchangeEcdhReply(KeyExchangeEcdhReplyParseError),
     ServiceRequest(ParseServiceRequestError),
     ServiceAccept(ParseServiceAcceptError),
     UserAuth(userauth::ParseError),
     Channel(channel::ParseError),
 }
-
-#[derive(Debug)]
-pub struct Full;
 
 macro_rules! msg {
     ($v:ident -> $f:ident, $g:ident) => {
@@ -204,13 +200,13 @@ pub struct Disconnect<'a> {
 }
 
 impl<'a> Disconnect<'a> {
-    fn parse(data: &'a [u8]) -> Result<Self, ParseDisconnectError> {
-        let reason = data.get(..4).ok_or(ParseDisconnectError::BadLength)?;
-        let description = parse_string(&data[4..]).ok_or(ParseDisconnectError::BadLength)?;
+    fn parse(data: &'a [u8]) -> Result<Self, DisconnectParseError> {
+        let reason = data.get(..4).ok_or(DisconnectParseError::BadLength)?;
+        let description = parse_string(&data[4..]).ok_or(DisconnectParseError::BadLength)?;
         let data = &data[4 + 4 + description.len()..];
-        let language = parse_string(data).ok_or(ParseDisconnectError::BadLength)?;
+        let language = parse_string(data).ok_or(DisconnectParseError::BadLength)?;
         if data.len() != 4 + language.len() {
-            Err(ParseDisconnectError::BadLength)
+            Err(DisconnectParseError::BadLength)
         } else {
             Ok(Self {
                 reason: u32::from_be_bytes(reason.try_into().unwrap()),
@@ -219,9 +215,101 @@ impl<'a> Disconnect<'a> {
             })
         }
     }
+
+    fn serialize(&self, buf: &mut [u8]) -> Option<usize> {
+        let (a, buf) = make_uint32(buf, self.reason)?;
+        let (b, buf) = make_string2(buf, self.description)?;
+        let (c, _) = make_string2(buf, self.language)?;
+        Some(a + b + c)
+    }
 }
 
 #[derive(Debug)]
-pub enum ParseDisconnectError {
+pub enum DisconnectParseError {
     BadLength,
+}
+
+pub struct Ignore<'a> {
+    pub data: &'a [u8],
+}
+
+impl<'a> Ignore<'a> {
+    fn parse(data: &'a [u8]) -> Result<Self, IgnoreParseError> {
+        let (data, d) = parse_string3(data).ok_or(IgnoreParseError::Truncated)?;
+        d.is_empty()
+            .then(|| Self { data })
+            .ok_or(IgnoreParseError::Unread)
+    }
+
+    fn serialize(&self, buf: &mut [u8]) -> Option<usize> {
+        let (a, _) = make_string2(buf, self.data)?;
+        Some(a)
+    }
+}
+
+#[derive(Debug)]
+pub enum IgnoreParseError {
+    Truncated,
+    Unread,
+}
+
+pub struct Unimplemented {
+    pub sequence_number: u32,
+}
+
+impl Unimplemented {
+    fn parse(data: &[u8]) -> Result<Self, UnimplementedParseError> {
+        let (sequence_number, data) =
+            parse_uint32(data).ok_or(UnimplementedParseError::Truncated)?;
+        data.is_empty()
+            .then(|| Self { sequence_number })
+            .ok_or(UnimplementedParseError::Unread)
+    }
+
+    fn serialize(&self, buf: &mut [u8]) -> Option<usize> {
+        let (a, _) = make_uint32(buf, self.sequence_number)?;
+        Some(a)
+    }
+}
+
+#[derive(Debug)]
+pub enum UnimplementedParseError {
+    Truncated,
+    Unread,
+}
+
+pub struct Debug<'a> {
+    pub always_display: bool,
+    pub message: &'a str,
+    pub language: &'a [u8],
+}
+
+impl<'a> Debug<'a> {
+    fn parse(data: &'a [u8]) -> Result<Self, DebugParseError> {
+        let (always_display, data) = parse_bool(data).ok_or(DebugParseError::Truncated)?;
+        let (message, data) = parse_string3(data).ok_or(DebugParseError::Truncated)?;
+        let (language, data) = parse_string3(data).ok_or(DebugParseError::Truncated)?;
+        let message = core::str::from_utf8(message).map_err(|_| DebugParseError::InvalidUtf8)?;
+        data.is_empty()
+            .then(|| Self {
+                always_display,
+                message,
+                language,
+            })
+            .ok_or(DebugParseError::Unread)
+    }
+
+    fn serialize(&self, buf: &mut [u8]) -> Option<usize> {
+        let (a, buf) = make_bool(buf, self.always_display)?;
+        let (b, buf) = make_string2(buf, self.message.as_ref())?;
+        let (c, _) = make_string2(buf, self.language)?;
+        Some(a + b + c)
+    }
+}
+
+#[derive(Debug)]
+pub enum DebugParseError {
+    Truncated,
+    Unread,
+    InvalidUtf8,
 }

@@ -493,9 +493,10 @@ mod test {
                 let mut a @ mut b = [0; 2048];
                 let a = Message::Channel(Channel::$v($val))
                     .serialize(&mut a)
-                    .unwrap();
+                    .unwrap()
+                    .0;
                 dbg!(&a);
-                let b = Message::parse(a).unwrap().serialize(&mut b).unwrap();
+                let b = Message::parse(a).unwrap().serialize(&mut b).unwrap().0;
                 assert_eq!(a, b);
             }
         };

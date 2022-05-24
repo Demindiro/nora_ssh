@@ -120,12 +120,8 @@ pub(crate) fn split(data: &[u8], i: usize) -> Option<(&[u8], &[u8])> {
     (data.len() >= i).then(|| data.split_at(i))
 }
 
-pub(crate) fn name_list(data: &[u8]) -> Option<(&[u8], &[u8])> {
-    let (len, data) = split(data, 4)?;
-    let len = u32::from_be_bytes(len.try_into().unwrap())
-        .try_into()
-        .unwrap();
-    split(data, len)
+pub(crate) fn name_list(data: &[u8]) -> Option<(Result<NameList<'_>, InvalidNameList>, &[u8])> {
+    parse_string3(data).map(|(list, data)| (NameList::try_from(list), data))
 }
 
 pub(crate) fn make_string_len(s: &[u8]) -> [u8; 4] {
@@ -205,6 +201,10 @@ pub(crate) fn make_pos_mpint<'a>(buf: &'a mut [u8], mut s: &[u8]) -> Option<usiz
         .copy_from_slice(&u32::try_from(i + s.len()).unwrap().to_be_bytes());
     buf.get_mut(4 + i..4 + i + s.len())?.copy_from_slice(s);
     Some(4 + i + s.len())
+}
+
+pub(crate) fn make_pos_mpint2<'a>(buf: &'a mut [u8], s: &[u8]) -> Option<(usize, &'a mut [u8])> {
+    make_pos_mpint(buf, s).map(|i| (i, &mut buf[i..]))
 }
 
 #[cfg(test)]
