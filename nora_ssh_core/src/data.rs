@@ -152,6 +152,13 @@ pub(crate) fn make_bool(buf: &mut [u8], value: bool) -> Option<(usize, &mut [u8]
     Some((1, buf))
 }
 
+pub(crate) fn make_uint32(buf: &mut [u8], value: u32) -> Option<(usize, &mut [u8])> {
+    (buf.len() >= 4).then(|| {
+        buf[..4].copy_from_slice(&value.to_be_bytes());
+        (4, &mut buf[4..])
+    })
+}
+
 pub(crate) fn make_raw<'a>(buf: &'a mut [u8], data: &[u8]) -> Option<(usize, &'a mut [u8])> {
     (data.len() <= buf.len()).then(|| {
         let (cpy, buf) = buf.split_at_mut(data.len());
@@ -172,6 +179,10 @@ pub(crate) fn parse_string2(s: &[u8]) -> Option<(&[u8], usize)> {
 
 pub(crate) fn parse_string3(s: &[u8]) -> Option<(&[u8], &[u8])> {
     parse_string2(s).map(|(v, i)| (v, &s[i..]))
+}
+
+pub(crate) fn parse_uint32(buf: &[u8]) -> Option<(u32, &[u8])> {
+    (buf.len() >= 4).then(|| (u32::from_be_bytes(buf[..4].try_into().unwrap()), &buf[4..]))
 }
 
 pub(crate) fn make_pos_mpint<'a>(buf: &'a mut [u8], mut s: &[u8]) -> Option<usize> {
