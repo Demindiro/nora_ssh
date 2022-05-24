@@ -1,5 +1,5 @@
 pub mod channel;
-mod key_exchange;
+pub mod key_exchange;
 mod service;
 pub mod userauth;
 

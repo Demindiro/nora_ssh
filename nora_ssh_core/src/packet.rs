@@ -73,7 +73,7 @@ impl<'a> Packet<'a> {
         let offt = usize::from(pad_with_packet_length) * 4;
         if (slf.packet_len() + offt) % block_size.to_usize() != 0 {
             Err(WrapRawError::BadAlignment)
-        } else if slf.padding_len() + 4 > slf.packet_len() {
+        } else if slf.padding_len() >= slf.packet_len() {
             Err(WrapRawError::PaddingTooLarge)
         } else {
             Ok(slf)

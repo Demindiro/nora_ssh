@@ -1,4 +1,4 @@
-mod ecdh;
+pub mod ecdh;
 
 pub use ecdh::{
     KeyExchangeEcdhInit, KeyExchangeEcdhInitParseError, KeyExchangeEcdhReply,
@@ -6,8 +6,7 @@ pub use ecdh::{
 };
 
 use crate::data::{
-    make_bool, make_raw, make_string2, name_list, split,
-    InvalidNameList, NameList,
+    make_bool, make_raw, make_string2, make_uint32, name_list, split, InvalidNameList, NameList,
 };
 
 pub struct KeyExchangeInit<'a> {
@@ -85,8 +84,9 @@ impl<'a> KeyExchangeInit<'a> {
         let (i, buf) = make_string2(buf, self.compression_algorithms_server_to_client.into())?;
         let (j, buf) = make_string2(buf, self.languages_client_to_server.into())?;
         let (k, buf) = make_string2(buf, self.languages_server_to_client.into())?;
-        let (l, _) = make_bool(buf, self.first_kex_packet_follows)?;
-        Some(a + b + c + d + e + f + g + h + i + j + k + l)
+        let (l, buf) = make_bool(buf, self.first_kex_packet_follows)?;
+        let (m, _) = make_uint32(buf, 0)?;
+        Some(a + b + c + d + e + f + g + h + i + j + k + l + m)
     }
 }
 

@@ -495,7 +495,6 @@ mod test {
                     .serialize(&mut a)
                     .unwrap()
                     .0;
-                dbg!(&a);
                 let b = Message::parse(a).unwrap().serialize(&mut b).unwrap().0;
                 assert_eq!(a, b);
             }

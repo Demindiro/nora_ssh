@@ -663,8 +663,11 @@ dependencies = [
  "futures",
  "generic-array",
  "nora_ssh_core",
+ "p256",
  "rand",
+ "sha2",
  "subtle",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -676,12 +679,9 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "generic-array",
- "p256",
  "poly1305",
  "rand",
- "sha2",
  "subtle",
- "x25519-dalek",
 ]
 
 [[package]]
