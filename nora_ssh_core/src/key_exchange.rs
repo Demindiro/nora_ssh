@@ -87,6 +87,3 @@ impl<D: Digest + OutputSizeUser> KeyMaterial<D> {
     gen!(encryption_key[b'C']);
     gen!(integrity_key[b'E']);
 }
-
-/// Key exchange handler.
-pub struct KeyExchange {}

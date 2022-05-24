@@ -1,12 +1,7 @@
 use crate::{
     arena::Arena,
-    cipher::Cipher,
     host::{self, Host, HostClient, HostKey, InError, OutError, SignKey},
-    identifier::Identifier,
-    message::{self as msg, Message},
-    packet::Packet,
     sync::LocalMutex,
-    Handler,
 };
 use core::{cell::RefCell, future::Future, pin::Pin};
 use ecdsa::{hazmat::SignPrimitive, SignatureSize};
@@ -20,6 +15,11 @@ use futures::{
     AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, FutureExt, Stream, StreamExt,
 };
 use generic_array::ArrayLength;
+use nora_ssh_core::{
+    cipher::{ChaCha20Poly1305, Cipher},
+    identifier::Identifier,
+    message::{self as msg, Message},
+};
 use rand::{CryptoRng, RngCore, SeedableRng};
 use std::rc::Rc;
 use subtle::CtOption;
@@ -61,7 +61,7 @@ where
 
 impl<Handlers> Server<Handlers>
 where
-    Handlers: ServerHandlers<Sign = p256::NistP256, Crypt = crate::cipher::ChaCha20Poly1305>,
+    Handlers: ServerHandlers<Sign = p256::NistP256, Crypt = ChaCha20Poly1305>,
 {
     pub async fn start(self) -> ! {
         let mut new_clients = FuturesUnordered::new();
@@ -109,7 +109,7 @@ where
                 wr_enc
                     .send(
                         &mut pkt_buf_mini,
-                        |buf| msg.serialize(buf).unwrap().len(),
+                        |buf| msg.serialize(buf).unwrap().0.len(),
                         &mut wr,
                         &mut rng,
                     )
@@ -133,7 +133,7 @@ where
                     wr_enc
                         .send(
                             &mut pkt_buf,
-                            |buf| msg.serialize(buf).unwrap().len(),
+                            |buf| msg.serialize(buf).unwrap().0.len(),
                             &mut wr,
                             &mut rng,
                         )
@@ -196,7 +196,7 @@ where
             recipient_channel: channel,
             data,
         }));
-        self.send(buf, |buf| msg.serialize(buf).unwrap().len())
+        self.send(buf, |buf| msg.serialize(buf).unwrap().0.len())
             .await
     }
 
@@ -218,11 +218,9 @@ where
                     Ok(Action::Exit) => return Ok(()),
                     Ok(Action::NewIo { stdout, stderr, channel }) => {
                         if let Some(stdout) = stdout {
-                            dbg!();
                             stdout_inputs.push(read(stdout, channel));
                         }
                         if let Some(stderr) = stderr {
-                            dbg!();
                             stderr_inputs.push(read(stderr, channel));
                         }
                     }
@@ -262,10 +260,10 @@ where
                             recipient_channel: o.sender_channel,
                             window_size: o.window_size,
                             max_packet_size: o.max_packet_size,
-                            stuff: &[],
+                            data: &[],
                         },
                     ));
-                    self.send(buf, |buf| msg.serialize(buf).unwrap().len())
+                    self.send(buf, |buf| msg.serialize(buf).unwrap().0.len())
                         .await
                         .map_err(ReceiveError::Out)?;
                 }
@@ -299,7 +297,7 @@ where
                     let channel = ch.peer_channel;
                     drop(channels);
                     if r.want_reply {
-                        self.send(buf, |buf| msg.serialize(buf).unwrap().len())
+                        self.send(buf, |buf| msg.serialize(buf).unwrap().0.len())
                             .await
                             .map_err(ReceiveError::Out)?;
                     }
@@ -316,20 +314,26 @@ where
                 }
                 Message::Channel(msg::Channel::Data(d)) => {
                     let mut channels = self.channels.borrow_mut();
-                    let ch = channels
-                        .get_mut(d.recipient_channel)
-                        .unwrap();
+                    let ch = channels.get_mut(d.recipient_channel).unwrap();
                     ch.stdin.as_mut().unwrap().write(d.data).await.unwrap();
                 }
+                Message::Channel(msg::Channel::ExtendedData(_)) => todo!(),
                 Message::Channel(msg::Channel::Eof(e)) => {
                     self.channels.borrow_mut().remove(e.recipient_channel);
                 }
+                Message::Channel(msg::Channel::Close(_)) => todo!(),
                 Message::Channel(msg::Channel::OpenConfirmation(_)) => todo!(),
+                Message::Channel(msg::Channel::OpenFailure(_)) => todo!(),
+                Message::Channel(msg::Channel::WindowAdjust(_)) => todo!(),
                 Message::Channel(msg::Channel::Success(_)) => todo!(),
                 Message::Channel(msg::Channel::Failure(_)) => todo!(),
                 Message::Disconnect(_) => return Ok(Action::Exit),
+                Message::Ignore(_) => {}
+                Message::Unimplemented(_) => todo!(),
+                Message::Debug(_) => todo!(),
                 Message::KeyExchangeInit(_) => todo!(),
                 Message::KeyExchangeEcdhInit(_) => todo!(),
+                Message::KeyExchangeEcdhReply(_) => todo!(),
                 Message::NewKeys(_) => todo!(),
                 Message::ServiceRequest(req) => {
                     dbg!(core::str::from_utf8(req.into()));

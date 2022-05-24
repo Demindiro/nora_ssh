@@ -1,4 +1,4 @@
-use crate::data::{make_string_len, parse_string};
+use crate::data::{make_string2, parse_string};
 
 macro_rules! impl_s {
     ($name:ident ? $err:ident) => {
@@ -18,12 +18,9 @@ macro_rules! impl_s {
                     .ok_or($err::BadLength)
             }
 
-            pub fn send<R, F>(&self, mut send: F) -> Result<(), R>
-            where
-                F: FnMut(&[u8]) -> Result<(), R>,
-            {
-                send(&make_string_len(self.service_name))?;
-                send(self.service_name)
+            pub fn serialize(&self, buf: &mut [u8]) -> Option<usize> {
+                let (a, _) = make_string2(buf, self.service_name)?;
+                Some(a)
             }
         }
 

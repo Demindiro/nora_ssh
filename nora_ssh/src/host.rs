@@ -1,15 +1,12 @@
 use crate::{
-    cipher::{ChaCha20Poly1305, Cipher, Error, CIPHER_NAMES},
-    data::{make_pos_mpint, make_string_len},
-    identifier::{Identifier, ParseIdentError},
-    key_exchange::{Direction, KeyMaterial, ALGORITHM_NAMES},
-    message::{KeyExchangeEcdhReply, Message, MessageParseError, NewKeys},
-    packet::{BlockSize, Packet, PacketParseError, WrapRawError},
+    identifier::{self, ParseIdentError},
+    packet::{self, PacketParseError},
 };
-use core::{fmt, future::Future};
 use digest::Digest;
 use ecdsa::{
-    hazmat::SignPrimitive, signature::Signer, PrimeCurve, SignatureSize, SigningKey, VerifyingKey,
+    hazmat::SignPrimitive,
+    signature::{Signature, Signer},
+    PrimeCurve, SignatureSize, SigningKey, VerifyingKey,
 };
 use elliptic_curve::{
     ops::{Invert, Reduce},
@@ -17,6 +14,16 @@ use elliptic_curve::{
 };
 use futures::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use generic_array::ArrayLength;
+use nora_ssh_core::{
+    cipher::{ChaCha20Poly1305, Cipher, Error, CIPHER_NAMES},
+    identifier::Identifier,
+    key_exchange::{Direction, KeyMaterial, ALGORITHM_NAMES},
+    message::{
+        key_exchange::ecdh::{self, Key, KeyBlob, KeyExchangeDigest, SignatureBlob},
+        KeyExchangeEcdhReply, KeyExchangeInit, Message, MessageParseError, NewKeys,
+    },
+    packet::{BlockSize, Packet, WrapRawError},
+};
 use rand::{CryptoRng, RngCore};
 use subtle::CtOption;
 
@@ -96,7 +103,7 @@ impl Host<p256::NistP256> {
         read: &mut Read,
         write: &mut Write,
         mut rng: Rng,
-    ) -> Result<HostClient<crate::cipher::ChaCha20Poly1305>, HandleNewClientError>
+    ) -> Result<HostClient<ChaCha20Poly1305>, HandleNewClientError>
     where
         Read: AsyncRead + Unpin,
         Write: AsyncWrite + Unpin,
@@ -107,20 +114,10 @@ impl Host<p256::NistP256> {
 
         let mut pkt_buf = [0; 1 << 16];
 
-        let mut exchange_hash = D::new();
-        let update_string = |hash: &mut D, s: &[u8]| {
-            hash.update(&make_string_len(s));
-            hash.update(s);
-        };
-        let update_pos_mpint = |hash: &mut D, s: &[u8]| {
-            let mut buf = [0; 4 + 1 + 32];
-            let l = make_pos_mpint(&mut buf, s).unwrap();
-            hash.update(&buf[..l]);
-        };
+        let exchange_hash = KeyExchangeDigest::<D>::default();
 
         // Send identifier + kexinit
-        self.identifier
-            .send(write)
+        identifier::send(self.identifier, write)
             .await
             .map_err(HandleNewClientError::Write)?;
         let mut host_pkt = [0; 256];
@@ -129,19 +126,26 @@ impl Host<p256::NistP256> {
             BlockSize::B8,
             true,
             |buf| {
-                crate::message::KeyExchangeInit::new_payload(
-                    buf,
-                    ALGORITHM_NAMES.into_iter().copied(),
-                    [self.host_key.name()].into_iter(),
-                    CIPHER_NAMES.into_iter().copied(),
-                    CIPHER_NAMES.into_iter().copied(),
-                    [].into_iter(),
-                    [].into_iter(),
-                    [].into_iter(),
-                    [].into_iter(),
-                    [].into_iter(),
-                    [].into_iter(),
-                )
+                Message::KeyExchangeInit(KeyExchangeInit {
+                    cookie: b"nomnommunchmunch",
+                    kex_algorithms: b"curve25519-sha256".try_into().unwrap(),
+                    server_host_key_algorithms: b"ecdsa-sha2-nistp256".try_into().unwrap(),
+                    encryption_algorithms_client_to_server: b"chacha20-poly1305@openssh.com"
+                        .try_into()
+                        .unwrap(),
+                    encryption_algorithms_server_to_client: b"chacha20-poly1305@openssh.com"
+                        .try_into()
+                        .unwrap(),
+                    compression_algorithms_client_to_server: b"none".try_into().unwrap(),
+                    compression_algorithms_server_to_client: b"none".try_into().unwrap(),
+                    mac_algorithms_client_to_server: b"none".try_into().unwrap(),
+                    mac_algorithms_server_to_client: b"none".try_into().unwrap(),
+                    languages_client_to_server: b"".try_into().unwrap(),
+                    languages_server_to_client: b"".try_into().unwrap(),
+                    first_kex_packet_follows: false,
+                })
+                .serialize(buf)
+                .unwrap()
                 .0
                 .len()
             },
@@ -154,34 +158,38 @@ impl Host<p256::NistP256> {
 
         // Receive id + kexinit
         let mut ident = [0; Identifier::MAX_LEN];
-        let client_ident = Identifier::parse(read, &mut ident)
+        let client_ident = identifier::parse(read, &mut ident)
             .await
             .map_err(HandleNewClientError::ParseIdentifierError)?;
 
-        update_string(&mut exchange_hash, client_ident.as_ref());
-        update_string(&mut exchange_hash, self.identifier.as_ref());
-        let pkt = Packet::parse(read, &mut pkt_buf)
+        let exchange_hash = exchange_hash.update(&client_ident).update(&self.identifier);
+        let pkt = packet::parse(&mut pkt_buf, read, true, BlockSize::B8)
             .await
             .map_err(HandleNewClientError::PacketParseError)?;
-        update_string(&mut exchange_hash, pkt.payload());
-        update_string(&mut exchange_hash, host_pkt.payload());
+        let exchange_hash = exchange_hash
+            .update(pkt.payload())
+            .update(host_pkt.payload());
 
         let msg = Message::parse(pkt.payload())
             .map_err(HandleNewClientError::MessageParseError)?
             .into_kex_init()
             .ok_or(HandleNewClientError::ExpectedKeyExchangeInit)?;
         if !msg
-            .kex_algorithms()
-            .any(|s| ALGORITHM_NAMES.iter().any(|t| t.as_bytes() == s))
+            .kex_algorithms
+            .iter()
+            .any(|s| ALGORITHM_NAMES.iter().any(|&t| t == s))
             || !msg
-                .server_host_key_algorithms()
-                .any(|s| s == self.host_key.name().as_bytes())
+                .server_host_key_algorithms
+                .iter()
+                .any(|s| s == self.host_key.name())
             || !msg
-                .encryption_algorithms_client_to_server()
-                .any(|s| CIPHER_NAMES.iter().any(|t| t.as_bytes() == s))
+                .encryption_algorithms_client_to_server
+                .iter()
+                .any(|s| CIPHER_NAMES.iter().any(|&t| t == s))
             || !msg
-                .encryption_algorithms_server_to_client()
-                .any(|s| CIPHER_NAMES.iter().any(|t| t.as_bytes() == s))
+                .encryption_algorithms_server_to_client
+                .iter()
+                .any(|s| CIPHER_NAMES.iter().any(|&t| t == s))
         // TODO we should handle the case where a HMAC needs to be selected if we're
         // not using chacha20-poly1305
         {
@@ -193,24 +201,34 @@ impl Host<p256::NistP256> {
         let server_ephermal_public = x25519_dalek::PublicKey::from(&server_ephermal_secret);
 
         // Receive the client's temporary key
-        let pkt = Packet::parse(read, &mut pkt_buf)
+        let pkt = packet::parse(&mut pkt_buf, read, true, BlockSize::B8)
             .await
             .map_err(HandleNewClientError::PacketParseError)?;
         let client_ephermal_public = Message::parse(pkt.payload())
             .unwrap()
             .into_kex_ecdh_init()
             .unwrap()
-            .into_public_key();
+            .client_ephermal_public_key;
+        let client_ephermal_public = <[u8; 32]>::try_from(client_ephermal_public).unwrap();
+        let client_ephermal_public = x25519_dalek::PublicKey::from(client_ephermal_public);
+
+        let server_public_key = self.host_key.public.to_encoded_point(false);
+        let server_public_key = Key {
+            name: b"ecdsa-sha2-nistp256",
+            blob: KeyBlob {
+                identifier: b"nistp256",
+                // OpenSSH doesn't like compressed points.
+                q: server_public_key.as_bytes(),
+            },
+        };
 
         // Compute shared secret
-        let (b, _) = KeyExchangeEcdhReply::server_host_key(&mut pkt_buf, &self.host_key.public);
-        exchange_hash.update(b);
-        update_string(&mut exchange_hash, client_ephermal_public.as_bytes());
-        update_string(&mut exchange_hash, server_ephermal_public.as_bytes());
+        let exchange_hash = exchange_hash
+            .update(&mut pkt_buf, &server_public_key)
+            .update(client_ephermal_public.as_bytes())
+            .update(server_ephermal_public.as_bytes());
         let shared_secret = server_ephermal_secret.diffie_hellman(&client_ephermal_public);
-        update_pos_mpint(&mut exchange_hash, shared_secret.as_bytes());
-
-        let hash = exchange_hash.finalize();
+        let hash = exchange_hash.update(shared_secret.as_bytes());
         let sig = self.host_key.secret.sign(&hash);
 
         let key_material = KeyMaterial::<DKeyMaterial>::new(*shared_secret.as_bytes(), hash.into());
@@ -221,12 +239,17 @@ impl Host<p256::NistP256> {
             BlockSize::B8,
             true,
             |buf| {
-                KeyExchangeEcdhReply::new_payload(
-                    buf,
-                    &self.host_key.public,
-                    &server_ephermal_public,
-                    &sig,
-                )
+                let (r, s) = sig.split_bytes();
+                Message::KeyExchangeEcdhReply(KeyExchangeEcdhReply {
+                    server_public_key,
+                    server_ephermal_public_key: server_ephermal_public.as_bytes(),
+                    exchange_hash_signature: ecdh::Signature {
+                        name: b"ecdsa-sha2-nistp256",
+                        blob: SignatureBlob { r: &r, s: &s },
+                    },
+                })
+                .serialize(buf)
+                .unwrap()
                 .0
                 .len()
             },
@@ -253,16 +276,16 @@ impl Host<p256::NistP256> {
             &mut pkt_buf,
             BlockSize::B8,
             true,
-            |buf| Message::NewKeys(NewKeys).serialize(buf).unwrap().len(),
+            |buf| Message::NewKeys(NewKeys).serialize(buf).unwrap().0.len(),
             &mut rng,
         );
         write
             .write_all(pkt.as_raw())
             .await
             .map_err(HandleNewClientError::Write)?;
-        let pkt = Packet::parse(read, &mut pkt_buf)
+        let pkt = packet::parse(&mut pkt_buf, read, true, BlockSize::B8)
             .await
-            .map_err(HandleNewClientError::PacketParseError)?;
+            .map_err(HandleNewClientError::PacketParseError).unwrap();
         Message::parse(pkt.payload())
             .unwrap()
             .into_new_keys()
@@ -364,10 +387,6 @@ pub struct HostClient<D: Cipher> {
 }
 
 impl<D: Cipher> HostClient<D> {
-    pub fn send_receive(&mut self) -> (&mut Out<D>, &mut In<D>) {
-        (&mut self.send_cipher, &mut self.receive_cipher)
-    }
-
     pub fn into_send_receive(self) -> (Out<D>, In<D>) {
         (self.send_cipher, self.receive_cipher)
     }
