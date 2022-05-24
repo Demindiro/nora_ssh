@@ -2,7 +2,7 @@
 //!
 //! [RFC 4254 Section 5]: https://datatracker.ietf.org/doc/html/rfc4254#section-5
 
-use crate::data::{parse_bool, parse_string3, parse_uint32};
+use crate::data::{make_bool, make_string2, make_uint32, parse_bool, parse_string3, parse_uint32};
 use core::str;
 
 pub enum SessionRequest<'a> {
@@ -146,6 +146,89 @@ impl<'a> SessionRequest<'a> {
             _ => Err(ParseError::Unknown),
         }
     }
+
+    pub fn serialize<'b>(&self, buf: &'b mut [u8]) -> Option<(&'static [u8], usize)> {
+        match self {
+            Self::Pty {
+                terminal,
+                char_width,
+                char_height,
+                pixel_width,
+                pixel_height,
+                modes,
+            } => {
+                let (a, buf) = make_string2(buf, terminal)?;
+                let (b, buf) = make_uint32(buf, *char_width)?;
+                let (c, buf) = make_uint32(buf, *char_height)?;
+                let (d, buf) = make_uint32(buf, *pixel_width)?;
+                let (e, buf) = make_uint32(buf, *pixel_height)?;
+                let (f, _) = make_string2(buf, modes)?;
+                Some((b"pty-req", a + b + c + d + e + f))
+            }
+            Self::X11 {
+                single_connection,
+                auth_protocol,
+                auth_cookie,
+                screen,
+            } => {
+                let (a, buf) = make_bool(buf, *single_connection)?;
+                let (b, buf) = make_string2(buf, auth_protocol)?;
+                let (c, buf) = make_string2(buf, auth_cookie)?;
+                let (d, _) = make_uint32(buf, *screen)?;
+                Some((b"x11-req", a + b + c + d))
+            }
+            Self::Env { name, value } => {
+                let (a, buf) = make_string2(buf, name)?;
+                let (b, _) = make_string2(buf, value)?;
+                Some((b"env", a + b))
+            }
+            Self::Shell => Some((b"shell", 0)),
+            Self::Exec { command } => {
+                let (a, _) = make_string2(buf, command)?;
+                Some((b"exec", a))
+            }
+            Self::Subsystem { name } => {
+                let (a, _) = make_string2(buf, name)?;
+                Some((b"subsystem", a))
+            }
+            Self::WindowChange {
+                char_width,
+                char_height,
+                pixel_width,
+                pixel_height,
+            } => {
+                let (a, buf) = make_uint32(buf, *char_width)?;
+                let (b, buf) = make_uint32(buf, *char_height)?;
+                let (c, buf) = make_uint32(buf, *pixel_width)?;
+                let (d, _) = make_uint32(buf, *pixel_height)?;
+                Some((b"window-change", a + b + c + d))
+            }
+            Self::XonXoff { on } => {
+                let (a, _) = make_bool(buf, *on)?;
+                Some((b"xon-xoff", a))
+            }
+            Self::Signal { signal } => {
+                let (a, _) = make_string2(buf, (*signal).into())?;
+                Some((b"signal", a))
+            }
+            Self::ExitStatus { status } => {
+                let (a, _) = make_uint32(buf, *status)?;
+                Some((b"exit-status", a))
+            }
+            Self::ExitSignal {
+                signal,
+                core_dumped,
+                message,
+                language,
+            } => {
+                let (a, buf) = make_string2(buf, (*signal).into())?;
+                let (b, buf) = make_bool(buf, *core_dumped)?;
+                let (c, buf) = make_string2(buf, message.as_ref())?;
+                let (d, _) = make_string2(buf, language)?;
+                Some((b"exit-signal", a + b + c + d))
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -156,6 +239,7 @@ pub enum ParseError {
     InvalidUtf8,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Signal<'a> {
     Abort,
     Alarm,
@@ -209,4 +293,35 @@ signal! {
     b"TERM" = Terminate
     b"USR1" = User1
     b"USR2" = User2
+}
+
+#[cfg(test)]
+mod test {
+    use super::{super::super::Message, *};
+
+    macro_rules! sds {
+        ($ty:literal | $name:ident => $v:ident = $($e:ident : $val:expr,)*) => {
+            #[test]
+            fn $name() {
+                let mut a @ mut b = [0; 2048];
+                let (t, i) = SessionRequest::$v { $($e : $val,)* }.serialize(&mut a).unwrap();
+                assert_eq!(t, $ty);
+                let a = &a[..i];
+                let i = SessionRequest::parse(t, a).unwrap().serialize(&mut b).unwrap().1;
+                assert_eq!(a, &b[..i]);
+            }
+        };
+    }
+
+    sds!(b"pty-req" | serialize_deserialize_serialize_pty => Pty = terminal: b"v8999", char_width: 2032, char_height: 29302, pixel_width: 290323, pixel_height: 923029, modes: b"ofzkfeo,fezfz",);
+    sds!(b"x11-req" | serialize_deserialize_serialize_x11 => X11 = single_connection: true, auth_protocol: b"kregokgoek", auth_cookie: b"rpokge", screen: 2093,);
+    sds!(b"env" | serialize_deserialize_serialize_env => Env = name: b"aa", value: b"abc",);
+    sds!(b"shell" | serialize_deserialize_serialize_shell => Shell = );
+    sds!(b"exec" | serialize_deserialize_serialize_exec => Exec = command: b"abracadabra",);
+    sds!(b"subsystem" | serialize_deserialize_serialize_subsystem => Subsystem = name: b"quack",);
+    sds!(b"window-change" | serialize_deserialize_serialize_window_change => WindowChange = char_width: 2032, char_height: 29302, pixel_width: 290323, pixel_height: 923029,);
+    sds!(b"xon-xoff" | serialize_deserialize_serialize_xon_xoff => XonXoff = on: true,);
+    sds!(b"signal" | serialize_deserialize_serialize_signal => Signal = signal: Signal::User1,);
+    sds!(b"exit-status" | serialize_deserialize_serialize_exit_status => ExitStatus = status: 403,);
+    sds!(b"exit-signal" | serialize_deserialize_serialize_exit_signal => ExitSignal = signal: Signal::Other(b"kgroegre"), core_dumped: false, message: "goerkogre", language: b"",);
 }
