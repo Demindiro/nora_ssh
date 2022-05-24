@@ -285,7 +285,8 @@ impl Host<p256::NistP256> {
             .map_err(HandleNewClientError::Write)?;
         let pkt = packet::parse(&mut pkt_buf, read, true, BlockSize::B8)
             .await
-            .map_err(HandleNewClientError::PacketParseError).unwrap();
+            .map_err(HandleNewClientError::PacketParseError)
+            .unwrap();
         Message::parse(pkt.payload())
             .unwrap()
             .into_new_keys()

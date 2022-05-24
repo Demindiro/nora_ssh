@@ -18,7 +18,7 @@ use generic_array::ArrayLength;
 use nora_ssh_core::{
     cipher::{ChaCha20Poly1305, Cipher},
     identifier::Identifier,
-    message::{self as msg, Message},
+    message::{self as msg, channel::session::SessionRequest, Message},
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use std::rc::Rc;
@@ -203,6 +203,7 @@ where
     async fn start(self, server: &Server<Handlers>) -> Result<(), ReceiveError> {
         let mut stdout_inputs = FuturesUnordered::new();
         let mut stderr_inputs = FuturesUnordered::new();
+        let mut wait_exit = FuturesUnordered::new();
         async fn read<Io: AsyncRead + Unpin>(
             mut io: Io,
             channel: u32,
@@ -216,24 +217,48 @@ where
             select! {
                 ret = self.receive(&mut buf, server).fuse() => match ret {
                     Ok(Action::Exit) => return Ok(()),
-                    Ok(Action::NewIo { stdout, stderr, channel }) => {
+                    Ok(Action::NewIo { stdout, stderr, wait, channel }) => {
                         if let Some(stdout) = stdout {
                             stdout_inputs.push(read(stdout, channel));
                         }
                         if let Some(stderr) = stderr {
                             stderr_inputs.push(read(stderr, channel));
                         }
+                        wait_exit.push(async move { (wait.await, channel) });
                     }
                     Err(e) => return Err(e),
                 },
                 (stdout, data, l, channel) = stdout_inputs.select_next_some() => {
-                    stdout_inputs.push(read(stdout, channel));
-                    self.send_channel(&mut buf, channel, &data[..l]).await;
+                    if l > 0 {
+                        stdout_inputs.push(read(stdout, channel));
+                        self.send_channel(&mut buf, channel, &data[..l]).await;
+                    } else {
+                        self.send(&mut buf, |buf| Message::Channel(msg::Channel::Eof(msg::channel::Eof {
+                            recipient_channel: channel,
+                        })).serialize(buf).unwrap().0.len()).await;
+                        self.send(&mut buf, |buf| Message::Channel(msg::Channel::Close(msg::channel::Close {
+                            recipient_channel: channel,
+                        })).serialize(buf).unwrap().0.len()).await;
+                    }
                 },
                 (stderr, data, l, channel) = stderr_inputs.select_next_some() => {
-                    stderr_inputs.push(read(stderr, channel));
-                    self.send_channel(&mut buf, channel, &data[..l]).await;
+                    if l > 0 {
+                        stderr_inputs.push(read(stderr, channel));
+                        self.send_channel(&mut buf, channel, &data[..l]).await;
+                    }
                 },
+                (status, channel) = wait_exit.select_next_some() => {
+                    let mut data = [0; 256];
+                    let (ty, l) = SessionRequest::ExitStatus {
+                        status,
+                    }.serialize(&mut data).unwrap();
+                    self.send(&mut buf, |buf| Message::Channel(msg::Channel::Request(msg::channel::Request {
+                        recipient_channel: channel,
+                        ty,
+                        data: &data[..l],
+                        want_reply: false,
+                    })).serialize(buf).unwrap().0.len()).await;
+                }
             }
         }
     }
@@ -270,8 +295,13 @@ where
                 Message::Channel(msg::Channel::Request(r)) => {
                     let mut channels = self.channels.borrow_mut();
                     let ch = channels.get_mut(r.recipient_channel).unwrap();
-                    let (msg, stdout, stderr) = match r.ty {
-                        b"shell" => {
+                    // TODO check if the channel is actually a session channel
+                    let req = match SessionRequest::parse(r.ty, r.data) {
+                        Err(_) => todo!(),
+                        Ok(r) => r,
+                    };
+                    let (msg, stdout, stderr, wait) = match req {
+                        SessionRequest::Shell => {
                             let io = server
                                 .handlers
                                 .spawn(&mut *self.user.borrow_mut(), SpawnType::Shell, &[])
@@ -284,15 +314,52 @@ where
                                 })),
                                 io.stdout,
                                 io.stderr,
+                                Some(io.wait),
                             )
                         }
-                        _ => (
+                        SessionRequest::Exec { command } => {
+                            let io = server
+                                .handlers
+                                .spawn(
+                                    &mut *self.user.borrow_mut(),
+                                    SpawnType::Exec { command },
+                                    &[],
+                                )
+                                .await
+                                .unwrap();
+                            ch.stdin = io.stdin;
+                            (
+                                Message::Channel(msg::Channel::Success(msg::channel::Success {
+                                    recipient_channel: ch.peer_channel,
+                                })),
+                                io.stdout,
+                                io.stderr,
+                                Some(io.wait),
+                            )
+                        }
+                        SessionRequest::Pty { .. } => (
                             Message::Channel(msg::Channel::Failure(msg::channel::Failure {
                                 recipient_channel: ch.peer_channel,
                             })),
                             None,
                             None,
+                            None,
                         ),
+                        SessionRequest::X11 { .. } => todo!(),
+                        SessionRequest::Env { .. } => (
+                            Message::Channel(msg::Channel::Failure(msg::channel::Failure {
+                                recipient_channel: ch.peer_channel,
+                            })),
+                            None,
+                            None,
+                            None,
+                        ),
+                        SessionRequest::Subsystem { .. } => todo!(),
+                        SessionRequest::WindowChange { .. } => todo!(),
+                        SessionRequest::XonXoff { .. } => todo!(),
+                        SessionRequest::Signal { .. } => todo!(),
+                        SessionRequest::ExitStatus { .. } => todo!(),
+                        SessionRequest::ExitSignal { .. } => todo!(),
                     };
                     let channel = ch.peer_channel;
                     drop(channels);
@@ -307,6 +374,7 @@ where
                             return Ok(Action::NewIo {
                                 stdout,
                                 stderr,
+                                wait: wait.unwrap(),
                                 channel,
                             })
                         }
@@ -319,9 +387,16 @@ where
                 }
                 Message::Channel(msg::Channel::ExtendedData(_)) => todo!(),
                 Message::Channel(msg::Channel::Eof(e)) => {
-                    self.channels.borrow_mut().remove(e.recipient_channel);
+                    self.channels
+                        .borrow_mut()
+                        .get_mut(e.recipient_channel)
+                        .unwrap()
+                        .stdin
+                        .take();
                 }
-                Message::Channel(msg::Channel::Close(_)) => todo!(),
+                Message::Channel(msg::Channel::Close(c)) => {
+                    self.channels.borrow_mut().remove(c.recipient_channel);
+                }
                 Message::Channel(msg::Channel::OpenConfirmation(_)) => todo!(),
                 Message::Channel(msg::Channel::OpenFailure(_)) => todo!(),
                 Message::Channel(msg::Channel::WindowAdjust(_)) => todo!(),
@@ -355,6 +430,7 @@ where
     NewIo {
         stdout: Option<Stdout>,
         stderr: Option<Stderr>,
+        wait: Pin<Box<dyn Future<Output = u32>>>,
         channel: u32,
     },
 }
@@ -377,14 +453,16 @@ where
     pub stdin: Option<Stdin>,
     pub stdout: Option<Stdout>,
     pub stderr: Option<Stderr>,
+    pub wait: Pin<Box<dyn Future<Output = u32>>>,
 }
 
 pub enum ChannelType {
     Session,
 }
 
-pub enum SpawnType {
+pub enum SpawnType<'a> {
     Shell,
+    Exec { command: &'a [u8] },
 }
 
 #[derive(Debug)]
@@ -418,7 +496,7 @@ where
     async fn spawn<'a>(
         &self,
         user: &'a mut Self::User,
-        ty: SpawnType,
+        ty: SpawnType<'a>,
         data: &'a [u8],
     ) -> Result<IoSet<Self::Stdin, Self::Stdout, Self::Stderr>, ()>;
 }
