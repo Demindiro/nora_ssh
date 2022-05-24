@@ -17,8 +17,10 @@ use nora_ssh::{
 use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
 use std::{
     cell::{Cell, RefCell, RefMut},
+    ffi::OsStr,
     future::Future,
     ops::{Deref, DerefMut},
+    os::unix::ffi::OsStrExt,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
@@ -74,9 +76,13 @@ impl ServerHandlers for Handlers {
     async fn spawn<'a>(
         &self,
         user: &'a mut Self::User,
-        ty: SpawnType,
+        ty: SpawnType<'a>,
         data: &'a [u8],
     ) -> Result<IoSet<Self::Stdin, Self::Stdout, Self::Stderr>, ()> {
+        let wait = |child: &mut process::Child| {
+            let wait = child.status();
+            async move { wait.await.unwrap().code().unwrap_or(0) as u32 }
+        };
         match ty {
             SpawnType::Shell => {
                 let shell = std::env::var_os("SHELL").unwrap();
@@ -90,6 +96,28 @@ impl ServerHandlers for Handlers {
                     stdin: shell.stdin.take(),
                     stdout: shell.stdout.take(),
                     stderr: shell.stderr.take(),
+                    wait: Box::pin(wait(&mut shell)),
+                };
+                user.shell = Some(shell);
+                Ok(io)
+            }
+            SpawnType::Exec { command } => {
+                let mut args = command
+                    .split(|c| c.is_ascii_whitespace())
+                    .filter(|s| !s.is_empty())
+                    .map(std::ffi::OsStr::from_bytes);
+                let mut shell = process::Command::new(args.next().unwrap())
+                    .stdin(process::Stdio::piped())
+                    .stdout(process::Stdio::piped())
+                    .stderr(process::Stdio::piped())
+                    .args(args)
+                    .spawn()
+                    .unwrap();
+                let io = IoSet {
+                    stdin: shell.stdin.take(),
+                    stdout: shell.stdout.take(),
+                    stderr: shell.stderr.take(),
+                    wait: Box::pin(wait(&mut shell)),
                 };
                 user.shell = Some(shell);
                 Ok(io)
