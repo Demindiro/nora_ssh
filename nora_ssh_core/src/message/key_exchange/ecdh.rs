@@ -1,7 +1,6 @@
-use super::Message;
 use crate::data::{
-    make_pos_mpint, make_pos_mpint2, make_string, make_string2, make_uint32, name_list,
-    parse_string, parse_string3,
+    make_pos_mpint2,  make_string2, make_uint32,
+    parse_string3,
 };
 
 pub struct KeyExchangeEcdhInit<'a> {

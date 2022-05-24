@@ -5,9 +5,8 @@ pub use ecdh::{
     KeyExchangeEcdhReplyParseError,
 };
 
-use super::Message;
 use crate::data::{
-    make_bool, make_pos_mpint, make_raw, make_string, make_string2, name_list, parse_string, split,
+    make_bool, make_raw, make_string2, name_list, split,
     InvalidNameList, NameList,
 };
 
@@ -87,7 +86,7 @@ impl<'a> KeyExchangeInit<'a> {
         let (j, buf) = make_string2(buf, self.languages_client_to_server.into())?;
         let (k, buf) = make_string2(buf, self.languages_server_to_client.into())?;
         let (l, _) = make_bool(buf, self.first_kex_packet_follows)?;
-        Some(a + b + c + d + e + f + g + h + i + j + k)
+        Some(a + b + c + d + e + f + g + h + i + j + k + l)
     }
 }
 

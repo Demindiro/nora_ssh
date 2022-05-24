@@ -13,7 +13,6 @@
 //#![forbid(unsafe_code)]
 
 pub mod cipher;
-pub mod client;
 pub mod data;
 pub mod identifier;
 pub mod key_exchange;

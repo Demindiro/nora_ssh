@@ -124,17 +124,6 @@ pub(crate) fn name_list(data: &[u8]) -> Option<(Result<NameList<'_>, InvalidName
     parse_string3(data).map(|(list, data)| (NameList::try_from(list), data))
 }
 
-pub(crate) fn make_string_len(s: &[u8]) -> [u8; 4] {
-    u32::try_from(s.len()).unwrap().to_be_bytes()
-}
-
-pub(crate) fn make_string<'a>(buf: &'a mut [u8], s: &[u8]) -> Option<(&'a mut [u8], &'a mut [u8])> {
-    buf.get_mut(..4)?
-        .copy_from_slice(&u32::try_from(s.len()).unwrap().to_be_bytes());
-    buf.get_mut(4..4 + s.len())?.copy_from_slice(s);
-    Some(buf.split_at_mut(4 + s.len()))
-}
-
 pub(crate) fn make_string2<'a>(buf: &'a mut [u8], s: &[u8]) -> Option<(usize, &'a mut [u8])> {
     buf.get_mut(..4)?
         .copy_from_slice(&u32::try_from(s.len()).unwrap().to_be_bytes());
