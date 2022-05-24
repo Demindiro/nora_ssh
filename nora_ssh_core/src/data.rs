@@ -185,6 +185,10 @@ pub(crate) fn parse_uint32(buf: &[u8]) -> Option<(u32, &[u8])> {
     (buf.len() >= 4).then(|| (u32::from_be_bytes(buf[..4].try_into().unwrap()), &buf[4..]))
 }
 
+pub(crate) fn parse_bool(buf: &[u8]) -> Option<(bool, &[u8])> {
+    (buf.len() >= 1).then(|| (buf[0] != 0, &buf[1..]))
+}
+
 pub(crate) fn make_pos_mpint<'a>(buf: &'a mut [u8], mut s: &[u8]) -> Option<usize> {
     // Remove redundant zeroes
     while s.get(0) == Some(&0) {

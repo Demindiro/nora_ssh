@@ -1,5 +1,7 @@
 //! [RFC 4254]: https://datatracker.ietf.org/doc/html/rfc4254
 
+pub mod session;
+
 use crate::data::{
     make_bool, make_raw, make_string2, make_uint32, parse_string, parse_string3, parse_uint32,
 };
@@ -279,13 +281,16 @@ impl<'a> OpenFailure<'a> {
 
     fn serialize(&self, buf: &mut [u8]) -> Option<usize> {
         let (a, buf) = make_uint32(buf, self.recipient_channel)?;
-        let (b, buf) = make_uint32(buf, match self.reason {
-            OpenFailureReason::AdminstrativelyProhibited => 1,
-            OpenFailureReason::ConnectFailed => 2,
-            OpenFailureReason::UnknownChannelType => 3,
-            OpenFailureReason::ResourceShortage => 4,
-            OpenFailureReason::Other(r) => r,
-        })?;
+        let (b, buf) = make_uint32(
+            buf,
+            match self.reason {
+                OpenFailureReason::AdminstrativelyProhibited => 1,
+                OpenFailureReason::ConnectFailed => 2,
+                OpenFailureReason::UnknownChannelType => 3,
+                OpenFailureReason::ResourceShortage => 4,
+                OpenFailureReason::Other(r) => r,
+            },
+        )?;
         let (c, buf) = make_string2(buf, self.description.as_ref())?;
         let (d, _) = make_string2(buf, self.language)?;
         Some(a + b + c + d)
