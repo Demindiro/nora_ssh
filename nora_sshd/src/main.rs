@@ -106,7 +106,14 @@ impl ServerHandlers for Handlers {
                     .split(|c| c.is_ascii_whitespace())
                     .filter(|s| !s.is_empty())
                     .map(std::ffi::OsStr::from_bytes);
-                let mut shell = process::Command::new(args.next().unwrap())
+                let bin = args.next().unwrap();
+                let bin = if bin == "scp" {
+                    "/home/david/Documents/crypto/nora_ssh/target/debug/nora_scp".as_ref()
+                } else {
+                    bin
+                };
+                dbg!(core::str::from_utf8(command));
+                let mut shell = process::Command::new(bin)
                     .stdin(process::Stdio::piped())
                     .stdout(process::Stdio::piped())
                     .stderr(process::Stdio::piped())
