@@ -472,7 +472,8 @@ pub enum ReceiveError {
     Io(io::Error),
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(feature = "no_send"), async_trait::async_trait)]
+#[cfg_attr(feature = "no_send", async_trait::async_trait(?Send))]
 pub trait ServerHandlers
 where
     Self: 'static,
