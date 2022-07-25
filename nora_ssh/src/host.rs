@@ -112,7 +112,8 @@ impl Host<p256::NistP256> {
         type D = sha2::Sha256;
         type DKeyMaterial = sha2::Sha256;
 
-        let mut pkt_buf = [0; 1 << 16];
+        let mut pkt_buf = Vec::new();
+        pkt_buf.resize(1 << 16, 0);
 
         let exchange_hash = KeyExchangeDigest::<D>::default();
 

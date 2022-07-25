@@ -96,7 +96,8 @@ where
             .map_err(|_| ())?;
         let (mut wr_enc, mut rd_enc) = client.into_send_receive();
 
-        let mut pkt_buf = [0; 35000];
+        let mut pkt_buf = Vec::new();
+        pkt_buf.resize(35000, 0);
         let mut pkt_buf_mini = [0; 256];
 
         // Wait for userauth
@@ -212,7 +213,8 @@ where
             let l = io.read(&mut buf).await.unwrap();
             (io, buf, l, channel)
         }
-        let mut buf = [0; 35000];
+        let mut buf = Vec::new();
+        buf.resize(35000, 0);
         loop {
             select! {
                 ret = self.receive(&mut buf, server).fuse() => match ret {
