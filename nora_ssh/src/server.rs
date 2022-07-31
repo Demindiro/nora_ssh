@@ -66,10 +66,12 @@ where
     pub async fn start(self) -> ! {
         let mut new_clients = FuturesUnordered::new();
         let mut clients = FuturesUnordered::new();
+        let mut accept = self.handlers.accept().fuse();
         loop {
             select! {
-                (rd, wr) = self.handlers.accept().fuse() => {
+                (rd, wr) = accept => {
                     new_clients.push(self.authenticate_new_client(rd, wr));
+                    accept = self.handlers.accept().fuse();
                 },
                 cl = new_clients.select_next_some() => {
                     if let Ok(cl) = cl {
