@@ -137,6 +137,7 @@ fn receive(to: &[PathBuf], make_dir: bool) -> Result<(), Box<dyn Error>> {
             }
         }
     } else {
+        ping_ready()?;
         for path in to {
             let (ty, _mode, size, _file) =
                 read_header(&stdin, &mut header)?.ok_or("expected file")?;
