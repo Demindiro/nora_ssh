@@ -286,12 +286,11 @@ impl Host<p256::NistP256> {
             .map_err(HandleNewClientError::Write)?;
         let pkt = packet::parse(&mut pkt_buf, read, true, BlockSize::B8)
             .await
-            .map_err(HandleNewClientError::PacketParseError)
-            .unwrap();
+            .map_err(HandleNewClientError::PacketParseError)?;
         Message::parse(pkt.payload())
             .unwrap()
             .into_new_keys()
-            .unwrap();
+            .ok_or(HandleNewClientError::ExpectedKeys)?;
 
         Ok(HostClient {
             receive_cipher,
@@ -307,6 +306,7 @@ pub enum HandleNewClientError {
     PacketParseError(PacketParseError),
     ExpectedKeyExchangeInit,
     UnsupportedAlgorithms,
+    ExpectedKeys,
     Read(io::Error),
     Write(io::Error),
 }

@@ -28,7 +28,7 @@ use std::{
 fn main() {
     match start() {
         Ok(()) => {}
-        Err(e) => eprintln!("{}", e),
+        Err(e) => eprintln!("{} failed: {}", std::env::args().next().as_deref().unwrap_or("scp"),  e),
     }
 }
 
@@ -100,7 +100,7 @@ fn receive(to: &[PathBuf], make_dir: bool) -> Result<(), Box<dyn Error>> {
             (_, b'D') => todo!(),
             c => Err(format!("invalid mode {:?}", c))?,
         }
-    };
+    }
 
     let mut transfer_file = |mut f: File, mut size: usize| -> Result<_, Box<dyn Error>> {
         while size > 0 {
