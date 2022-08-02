@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use async_std::{
     net::{TcpListener, TcpStream},
     process,

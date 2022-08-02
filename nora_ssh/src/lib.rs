@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 mod arena;
 pub mod auth;
 pub mod client;
