@@ -1,7 +1,7 @@
 use crate::{
     arena::Arena,
     auth::Auth,
-    host::{self, Host, HostClient, HostKey, InError, OutError, SignKey},
+    host::{self, Host, HostKey, InError, OutError, SignKey},
     sync::LocalMutex,
 };
 use core::{cell::RefCell, future::Future, pin::Pin};
@@ -11,9 +11,8 @@ use elliptic_curve::{
     Curve, Scalar,
 };
 use futures::{
-    io, select,
-    stream::{FusedStream, FuturesUnordered},
-    AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, FutureExt, Stream, StreamExt,
+    io, select, stream::FuturesUnordered, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
+    FutureExt, StreamExt,
 };
 use generic_array::ArrayLength;
 use nora_ssh_core::{
@@ -24,9 +23,6 @@ use nora_ssh_core::{
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use subtle::CtOption;
-
-type Authenticating<Handlers> = Pin<Box<dyn Future<Output = Result<Client<Handlers>, ()>>>>;
-type Reading = Pin<Box<dyn Future<Output = Result<(), ReceiveError>>>>;
 
 pub struct Server<Handlers>
 where
@@ -146,20 +142,19 @@ where
                     if algorithm != a {
                         return Err(());
                     }
-                    let msg = Message::UserAuth(match self
-                        .handlers
-                        .public_key_exists(ua.user, ua.service, algorithm, key)
-                        .await
-                    {
-                        Ok(()) => UserAuth::PublicKeyOk(PublicKeyOk {
-                            algorithm,
-                            blob,
-                        }),
-                        Err(()) => UserAuth::Failure(Failure {
-                            alternative_methods: b"publickey,password".try_into().unwrap(),
-                            partial_success: false,
-                        }),
-                    });
+                    let msg = Message::UserAuth(
+                        match self
+                            .handlers
+                            .public_key_exists(ua.user, ua.service, algorithm, key)
+                            .await
+                        {
+                            Ok(()) => UserAuth::PublicKeyOk(PublicKeyOk { algorithm, blob }),
+                            Err(()) => UserAuth::Failure(Failure {
+                                alternative_methods: b"publickey,password".try_into().unwrap(),
+                                partial_success: false,
+                            }),
+                        },
+                    );
                     wr_enc
                         .send(
                             &mut pkt_buf_mini,
@@ -336,20 +331,20 @@ where
                 (stdout, data, l, channel) = stdout_inputs.select_next_some() => {
                     if l > 0 {
                         stdout_inputs.push(read(stdout, channel));
-                        self.send_channel(&mut buf, channel, &data[..l]).await;
+                        self.send_channel(&mut buf, channel, &data[..l]).await.map_err(ReceiveError::Out)?;
                     } else {
                         self.send(&mut buf, |buf| Message::Channel(msg::Channel::Eof(msg::channel::Eof {
                             recipient_channel: channel,
-                        })).serialize(buf).unwrap().0.len()).await;
+                        })).serialize(buf).unwrap().0.len()).await.map_err(ReceiveError::Out)?;
                         self.send(&mut buf, |buf| Message::Channel(msg::Channel::Close(msg::channel::Close {
                             recipient_channel: channel,
-                        })).serialize(buf).unwrap().0.len()).await;
+                        })).serialize(buf).unwrap().0.len()).await.map_err(ReceiveError::Out)?;
                     }
                 },
                 (stderr, data, l, channel) = stderr_inputs.select_next_some() => {
                     if l > 0 {
                         stderr_inputs.push(read(stderr, channel));
-                        self.send_channel(&mut buf, channel, &data[..l]).await;
+                        self.send_channel(&mut buf, channel, &data[..l]).await.map_err(ReceiveError::Out)?;
                     }
                 },
                 (status, channel) = wait_exit.select_next_some() => {
@@ -362,7 +357,7 @@ where
                         ty,
                         data: &data[..l],
                         want_reply: false,
-                    })).serialize(buf).unwrap().0.len()).await;
+                    })).serialize(buf).unwrap().0.len()).await.map_err(ReceiveError::Out)?;
                 }
             }
         }
@@ -516,8 +511,7 @@ where
                 Message::KeyExchangeEcdhReply(_) => todo!(),
                 Message::NewKeys(_) => todo!(),
                 Message::ServiceRequest(req) => {
-                    dbg!(core::str::from_utf8(req.into()));
-                    todo!();
+                    todo!("{:?}", core::str::from_utf8(req.into()))
                 }
                 Message::ServiceAccept(_) => todo!(),
                 Message::UserAuth(_) => todo!(),
@@ -545,6 +539,7 @@ where
     Stdin: AsyncWrite + Unpin,
 {
     peer_channel: u32,
+    #[allow(dead_code)]
     ty: ChannelType,
     stdin: Option<Stdin>,
 }

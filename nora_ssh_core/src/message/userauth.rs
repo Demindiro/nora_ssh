@@ -2,9 +2,8 @@
 //!
 //! [RFC 4252]: https://datatracker.ietf.org/doc/html/rfc4252
 
-use crate::{
-    data::{make_bool, make_raw, make_string2, parse_string, AsciiStr, InvalidNameList, NameList},
-    identifier::Identifier,
+use crate::data::{
+    make_bool, make_raw, make_string2, parse_string, AsciiStr, InvalidNameList, NameList,
 };
 use core::str;
 

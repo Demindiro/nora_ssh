@@ -4,29 +4,15 @@ use async_std::{
     net::{TcpListener, TcpStream},
     process,
 };
-use futures::{
-    future::{FusedFuture, FutureExt},
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf},
-    pin_mut, select,
-    stream::{FuturesUnordered, StreamExt},
-    stream_select,
-};
+use futures::io::{AsyncReadExt, ReadHalf, WriteHalf};
 use nora_ssh::{
     auth::Auth,
     cipher,
     server::{IoSet, Server, ServerHandlers, SpawnType},
     Identifier,
 };
-use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
-use std::{
-    cell::{Cell, RefCell, RefMut},
-    ffi::OsStr,
-    future::Future,
-    ops::{Deref, DerefMut},
-    os::unix::ffi::OsStrExt,
-    pin::Pin,
-    task::{Context, Poll, Waker},
-};
+use rand::rngs::StdRng;
+use std::os::unix::ffi::OsStrExt;
 
 #[async_std::main]
 async fn main() -> ! {
@@ -49,7 +35,7 @@ struct Handlers {
 }
 
 struct User {
-    name: Box<str>,
+    _name: Box<str>,
     shell: Option<process::Child>,
 }
 
@@ -71,10 +57,10 @@ impl ServerHandlers for Handlers {
 
     async fn public_key_exists<'a>(
         &self,
-        user: &'a [u8],
-        service: &'a [u8],
+        _user: &'a [u8],
+        _service: &'a [u8],
         algorithm: &'a [u8],
-        key: &'a [u8],
+        _key: &'a [u8],
     ) -> Result<(), ()> {
         if algorithm == b"ssh-ed25519" {
             Ok(())
@@ -86,12 +72,12 @@ impl ServerHandlers for Handlers {
     async fn authenticate<'a>(
         &self,
         user: &'a [u8],
-        service: &'a [u8],
+        _service: &'a [u8],
         auth: Auth<'a>,
     ) -> Result<Self::User, ()> {
         match auth {
             Auth::None => Err(()),
-            Auth::Password(pwd) => {
+            Auth::Password(_pwd) => {
                 todo!()
             }
             Auth::PublicKey {
@@ -110,7 +96,7 @@ impl ServerHandlers for Handlers {
                 key.verify(message, &signature.try_into().map_err(|_| ())?)
                     .map_err(|_| ())?;
                 Ok(User {
-                    name: core::str::from_utf8(user).unwrap().into(),
+                    _name: core::str::from_utf8(user).unwrap().into(),
                     shell: None,
                 })
             }
@@ -121,7 +107,7 @@ impl ServerHandlers for Handlers {
         &self,
         user: &'a mut Self::User,
         ty: SpawnType<'a>,
-        data: &'a [u8],
+        _data: &'a [u8],
     ) -> Result<IoSet<Self::Stdin, Self::Stdout, Self::Stderr>, ()> {
         let wait = |child: &mut process::Child| {
             let wait = child.status();

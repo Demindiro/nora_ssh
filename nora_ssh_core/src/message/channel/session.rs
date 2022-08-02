@@ -297,7 +297,7 @@ signal! {
 
 #[cfg(test)]
 mod test {
-    use super::{super::super::Message, *};
+    use super::*;
 
     macro_rules! sds {
         ($ty:literal | $name:ident => $v:ident = $($e:ident : $val:expr,)*) => {

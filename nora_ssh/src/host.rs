@@ -2,10 +2,9 @@ use crate::{
     identifier::{self, ParseIdentError},
     packet::{self, PacketParseError},
 };
-use digest::Digest;
 use ecdsa::{
     hazmat::SignPrimitive,
-    signature::{Signature, Signer},
+    signature::Signer,
     PrimeCurve, SignatureSize, SigningKey, VerifyingKey,
 };
 use elliptic_curve::{
@@ -308,7 +307,8 @@ pub enum HandleNewClientError {
     ExpectedKeyExchangeInit,
     UnsupportedAlgorithms,
     ExpectedKeys,
-    Read(io::Error),
+    #[allow(dead_code)]
+    Read(io::Error), // FIXME how come this is unused?
     Write(io::Error),
 }
 
