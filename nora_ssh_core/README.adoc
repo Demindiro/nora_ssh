@@ -1,0 +1,3 @@
+= Nora SSH Core
+
+Basic structures and functions useful for SSH libraries.

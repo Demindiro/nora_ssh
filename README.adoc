@@ -1,0 +1,10 @@
+= Nora SSH
+
+Pure Rust library for SSH clients and servers.
+
+== Crates
+
+* link:nora_ssh_core[`nora_scp_core`]: basic structures used by SSH.
+* link:nora_ssh[`nora_ssh`]: asynchronous server (and client) crate.
+* link:nora_sshd[`nora_sshd`]: example SSHD server.
+* link:nora_scp[`nora_scp`]: executable that implements the original SCP protocol.
