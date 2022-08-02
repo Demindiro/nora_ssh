@@ -2,7 +2,7 @@
 //!
 //! [RFC 4254 Section 5]: https://datatracker.ietf.org/doc/html/rfc4254#section-5
 
-use crate::data::{make_bool, make_string2, make_uint32, parse_bool, parse_string3, parse_uint32};
+use crate::data::{make_bool, make_string2, make_uint32, parse_bool, parse_string, parse_uint32};
 use core::str;
 
 pub enum SessionRequest<'a> {
@@ -56,7 +56,7 @@ pub enum SessionRequest<'a> {
 
 impl<'a> SessionRequest<'a> {
     pub fn parse(ty: &'a [u8], data: &'a [u8]) -> Result<Self, ParseError> {
-        let parse_str = |data| parse_string3(data).ok_or(ParseError::Truncated);
+        let parse_str = |data| parse_string(data).ok_or(ParseError::Truncated);
         let parse_u32 = |data| parse_uint32(data).ok_or(ParseError::Truncated);
         let parse_bool = |data| parse_bool(data).ok_or(ParseError::Truncated);
         let empty = |data: &[_]| data.is_empty().then(|| ()).ok_or(ParseError::Unread);

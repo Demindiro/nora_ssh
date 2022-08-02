@@ -121,7 +121,7 @@ pub(crate) fn split(data: &[u8], i: usize) -> Option<(&[u8], &[u8])> {
 }
 
 pub(crate) fn name_list(data: &[u8]) -> Option<(Result<NameList<'_>, InvalidNameList>, &[u8])> {
-    parse_string3(data).map(|(list, data)| (NameList::try_from(list), data))
+    parse_string(data).map(|(list, data)| (NameList::try_from(list), data))
 }
 
 pub(crate) fn make_string_len(s: &[u8]) -> [u8; 4] {
@@ -156,18 +156,13 @@ pub(crate) fn make_raw<'a>(buf: &'a mut [u8], data: &[u8]) -> Option<(usize, &'a
     })
 }
 
-pub(crate) fn parse_string(s: &[u8]) -> Option<&[u8]> {
-    parse_string2(s).map(|(s, _)| s)
-}
-
-pub(crate) fn parse_string2(s: &[u8]) -> Option<(&[u8], usize)> {
+/// Parse a byte string prefixed by a big-endian 32-bit length.
+///
+/// Returns the string's content and the remaining data.
+pub fn parse_string(s: &[u8]) -> Option<(&[u8], &[u8])> {
     let len = u32::from_be_bytes(s.get(..4)?.try_into().unwrap());
     let i = 4 + usize::try_from(len).unwrap();
-    s.get(4..i).map(|s| (s, i))
-}
-
-pub(crate) fn parse_string3(s: &[u8]) -> Option<(&[u8], &[u8])> {
-    parse_string2(s).map(|(v, i)| (v, &s[i..]))
+    s.get(4..i).map(|v| (v, &s[i..]))
 }
 
 pub(crate) fn parse_uint32(buf: &[u8]) -> Option<(u32, &[u8])> {

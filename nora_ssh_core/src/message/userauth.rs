@@ -3,7 +3,7 @@
 //! [RFC 4252]: https://datatracker.ietf.org/doc/html/rfc4252
 
 use crate::data::{
-    make_bool, make_raw, make_string2, parse_string3, AsciiStr, InvalidNameList, NameList,
+    make_bool, make_raw, make_string2, parse_string, AsciiStr, InvalidNameList, NameList,
 };
 use core::str;
 
@@ -144,7 +144,7 @@ pub struct Request<'a> {
 
 impl<'a> Request<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, RequestParseError> {
-        let parse = |data| parse_string3(data).ok_or(RequestParseError::Truncated);
+        let parse = |data| parse_string(data).ok_or(RequestParseError::Truncated);
         let empty = |data: &[_]| data.is_empty().then(|| ()).ok_or(RequestParseError::Unread);
         let (user, data) = parse(data)?;
         let (service, data) = parse(data)?;
@@ -324,7 +324,7 @@ pub struct Failure<'a> {
 impl<'a> Failure<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, FailureParseError> {
         let (alternative_methods, data) =
-            parse_string3(data).ok_or(FailureParseError::Truncated)?;
+            parse_string(data).ok_or(FailureParseError::Truncated)?;
         match data {
             &[] => Err(FailureParseError::Truncated),
             &[partial_success] => Ok(Self {
@@ -376,8 +376,8 @@ pub struct Banner<'a> {
 
 impl<'a> Banner<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, BannerParseError> {
-        let (message, data) = parse_string3(data).ok_or(BannerParseError::Truncated)?;
-        let (language, data) = parse_string3(data).ok_or(BannerParseError::Truncated)?;
+        let (message, data) = parse_string(data).ok_or(BannerParseError::Truncated)?;
+        let (language, data) = parse_string(data).ok_or(BannerParseError::Truncated)?;
         data.is_empty()
             .then(|| Self { message, language })
             .ok_or(BannerParseError::Unread)
@@ -403,8 +403,8 @@ pub struct PublicKeyOk<'a> {
 
 impl<'a> PublicKeyOk<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, PublicKeyOkParseError> {
-        let (algorithm, data) = parse_string3(data).ok_or(PublicKeyOkParseError::Truncated)?;
-        let (blob, data) = parse_string3(data).ok_or(PublicKeyOkParseError::Truncated)?;
+        let (algorithm, data) = parse_string(data).ok_or(PublicKeyOkParseError::Truncated)?;
+        let (blob, data) = parse_string(data).ok_or(PublicKeyOkParseError::Truncated)?;
         data.is_empty()
             .then(|| Self { algorithm, blob })
             .ok_or(PublicKeyOkParseError::Unread)

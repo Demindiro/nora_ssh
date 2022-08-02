@@ -15,7 +15,7 @@ pub use service::{
 pub use userauth::UserAuth;
 
 use crate::data::{
-    make_bool, make_string2, make_uint32, parse_bool, parse_string, parse_string3, parse_uint32,
+    make_bool, make_string2, make_uint32, parse_bool, parse_string, parse_uint32,
 };
 use core::ops::RangeInclusive;
 
@@ -202,10 +202,9 @@ pub struct Disconnect<'a> {
 impl<'a> Disconnect<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, DisconnectParseError> {
         let reason = data.get(..4).ok_or(DisconnectParseError::BadLength)?;
-        let description = parse_string(&data[4..]).ok_or(DisconnectParseError::BadLength)?;
-        let data = &data[4 + 4 + description.len()..];
-        let language = parse_string(data).ok_or(DisconnectParseError::BadLength)?;
-        if data.len() != 4 + language.len() {
+        let (description, data) = parse_string(&data[4..]).ok_or(DisconnectParseError::BadLength)?;
+        let (language, data) = parse_string(data).ok_or(DisconnectParseError::BadLength)?;
+        if !data.is_empty() {
             Err(DisconnectParseError::BadLength)
         } else {
             Ok(Self {
@@ -235,7 +234,7 @@ pub struct Ignore<'a> {
 
 impl<'a> Ignore<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, IgnoreParseError> {
-        let (data, d) = parse_string3(data).ok_or(IgnoreParseError::Truncated)?;
+        let (data, d) = parse_string(data).ok_or(IgnoreParseError::Truncated)?;
         d.is_empty()
             .then(|| Self { data })
             .ok_or(IgnoreParseError::Unread)
@@ -287,8 +286,8 @@ pub struct Debug<'a> {
 impl<'a> Debug<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, DebugParseError> {
         let (always_display, data) = parse_bool(data).ok_or(DebugParseError::Truncated)?;
-        let (message, data) = parse_string3(data).ok_or(DebugParseError::Truncated)?;
-        let (language, data) = parse_string3(data).ok_or(DebugParseError::Truncated)?;
+        let (message, data) = parse_string(data).ok_or(DebugParseError::Truncated)?;
+        let (language, data) = parse_string(data).ok_or(DebugParseError::Truncated)?;
         let message = core::str::from_utf8(message).map_err(|_| DebugParseError::InvalidUtf8)?;
         data.is_empty()
             .then(|| Self {

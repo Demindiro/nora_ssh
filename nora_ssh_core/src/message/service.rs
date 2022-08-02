@@ -13,8 +13,8 @@ macro_rules! impl_s {
 
             pub fn parse(data: &'a [u8]) -> Result<Self, $err> {
                 parse_string(data)
-                    .and_then(|s| (s.len() + 4 == data.len()).then(|| s))
-                    .map(Self::new)
+                    .filter(|(_, rem)| rem.is_empty())
+                    .map(|(s, _)| Self::new(s))
                     .ok_or($err::BadLength)
             }
 

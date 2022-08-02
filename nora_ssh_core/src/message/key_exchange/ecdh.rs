@@ -1,4 +1,4 @@
-use crate::data::{make_pos_mpint2, make_string2, make_uint32, parse_string3};
+use crate::data::{make_pos_mpint2, make_string2, make_uint32, parse_string};
 
 pub struct KeyExchangeEcdhInit<'a> {
     pub client_ephermal_public_key: &'a [u8],
@@ -7,7 +7,7 @@ pub struct KeyExchangeEcdhInit<'a> {
 impl<'a> KeyExchangeEcdhInit<'a> {
     pub(in super::super) fn parse(data: &'a [u8]) -> Result<Self, KeyExchangeEcdhInitParseError> {
         let (client_ephermal_public_key, data) =
-            parse_string3(data).ok_or(KeyExchangeEcdhInitParseError::Truncated)?;
+            parse_string(data).ok_or(KeyExchangeEcdhInitParseError::Truncated)?;
         data.is_empty()
             .then(|| Self {
                 client_ephermal_public_key,
@@ -35,7 +35,7 @@ pub struct KeyExchangeEcdhReply<'a> {
 
 impl<'a> KeyExchangeEcdhReply<'a> {
     pub(in super::super) fn parse(data: &'a [u8]) -> Result<Self, KeyExchangeEcdhReplyParseError> {
-        let parse_str = |d| parse_string3(d).ok_or(KeyExchangeEcdhReplyParseError::Truncated);
+        let parse_str = |d| parse_string(d).ok_or(KeyExchangeEcdhReplyParseError::Truncated);
         let (server_public_key, data) = parse_str(data)?;
         let server_public_key =
             Key::parse(server_public_key).ok_or(KeyExchangeEcdhReplyParseError::BadData)?;
@@ -79,7 +79,7 @@ pub struct Key<'a> {
 
 impl<'a> Key<'a> {
     fn parse(data: &'a [u8]) -> Option<Self> {
-        let (name, data) = parse_string3(data)?;
+        let (name, data) = parse_string(data)?;
         let blob = KeyBlob::parse(data)?;
         data.is_empty().then(|| Self { name, blob })
     }
@@ -98,8 +98,8 @@ pub struct KeyBlob<'a> {
 
 impl<'a> KeyBlob<'a> {
     fn parse(data: &'a [u8]) -> Option<Self> {
-        let (identifier, data) = parse_string3(data)?;
-        let (q, data) = parse_string3(data)?;
+        let (identifier, data) = parse_string(data)?;
+        let (q, data) = parse_string(data)?;
         data.is_empty().then(|| Self { identifier, q })
     }
 
@@ -117,8 +117,8 @@ pub struct Signature<'a> {
 
 impl<'a> Signature<'a> {
     fn parse(data: &'a [u8]) -> Option<Self> {
-        let (name, data) = parse_string3(data)?;
-        let (blob, data) = parse_string3(data)?;
+        let (name, data) = parse_string(data)?;
+        let (blob, data) = parse_string(data)?;
         let blob = SignatureBlob::parse(blob)?;
         data.is_empty().then(|| Self { name, blob })
     }
@@ -142,8 +142,8 @@ pub struct SignatureBlob<'a> {
 
 impl<'a> SignatureBlob<'a> {
     fn parse(data: &'a [u8]) -> Option<Self> {
-        let (r, data) = parse_string3(data)?;
-        let (s, data) = parse_string3(data)?;
+        let (r, data) = parse_string(data)?;
+        let (s, data) = parse_string(data)?;
         data.is_empty().then(|| Self { r, s })
     }
 

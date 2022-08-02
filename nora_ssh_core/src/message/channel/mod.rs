@@ -3,7 +3,7 @@
 pub mod session;
 
 use crate::data::{
-    make_bool, make_raw, make_string2, make_uint32, parse_string, parse_string3, parse_uint32,
+    make_bool, make_raw, make_string2, make_uint32, parse_string, parse_uint32,
 };
 use core::str;
 
@@ -171,8 +171,7 @@ pub struct Open<'a> {
 
 impl<'a> Open<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, OpenParseError> {
-        let ty = parse_string(data).ok_or(OpenParseError::Truncated)?;
-        let data = &data[4 + ty.len()..];
+        let (ty, data) = parse_string(data).ok_or(OpenParseError::Truncated)?;
         if data.len() < 12 {
             Err(OpenParseError::Truncated)
         } else if data.len() > 12 {
@@ -259,8 +258,8 @@ impl<'a> OpenFailure<'a> {
         let (recipient_channel, data) =
             parse_uint32(data).ok_or(OpenFailureParseError::Truncated)?;
         let (reason, data) = parse_uint32(data).ok_or(OpenFailureParseError::Truncated)?;
-        let (description, data) = parse_string3(data).ok_or(OpenFailureParseError::Truncated)?;
-        let (language, data) = parse_string3(data).ok_or(OpenFailureParseError::Truncated)?;
+        let (description, data) = parse_string(data).ok_or(OpenFailureParseError::Truncated)?;
+        let (language, data) = parse_string(data).ok_or(OpenFailureParseError::Truncated)?;
         data.is_empty()
             .then(|| ())
             .ok_or(OpenFailureParseError::Unread)?;
@@ -352,7 +351,7 @@ pub struct Data<'a> {
 impl<'a> Data<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, DataParseError> {
         let (recipient_channel, data) = parse_uint32(data).ok_or(DataParseError::Truncated)?;
-        let (data, d) = parse_string3(data).ok_or(DataParseError::Truncated)?;
+        let (data, d) = parse_string(data).ok_or(DataParseError::Truncated)?;
         d.is_empty()
             .then(|| Self {
                 recipient_channel,
@@ -385,7 +384,7 @@ impl<'a> ExtendedData<'a> {
         let (recipient_channel, data) =
             parse_uint32(data).ok_or(ExtendedDataParseError::Truncated)?;
         let (ty, data) = parse_uint32(data).ok_or(ExtendedDataParseError::Truncated)?;
-        let (data, d) = parse_string3(data).ok_or(ExtendedDataParseError::Truncated)?;
+        let (data, d) = parse_string(data).ok_or(ExtendedDataParseError::Truncated)?;
         d.is_empty()
             .then(|| Self {
                 recipient_channel,
@@ -424,8 +423,7 @@ impl<'a> Request<'a> {
                 .try_into()
                 .unwrap(),
         );
-        let ty = parse_string(&data[4..]).ok_or(RequestParseError::Truncated)?;
-        let data = &data[4 + 4 + ty.len()..];
+        let (ty, data) = parse_string(&data[4..]).ok_or(RequestParseError::Truncated)?;
         let want_reply = *data.get(0).ok_or(RequestParseError::Truncated)? != 0;
         Ok(Self {
             recipient_channel,
