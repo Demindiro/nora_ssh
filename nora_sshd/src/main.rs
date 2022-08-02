@@ -10,6 +10,7 @@ use futures::{
     stream_select,
 };
 use nora_ssh::{
+    auth::Auth,
     cipher,
     server::{IoSet, Server, ServerHandlers, SpawnType},
     Identifier,
@@ -66,11 +67,52 @@ impl ServerHandlers for Handlers {
         self.listener.accept().await.unwrap().0.split()
     }
 
-    async fn authenticate<'a>(&self, data: &'a [u8]) -> Result<Self::User, ()> {
-        Ok(User {
-            name: "TODO".into(),
-            shell: None,
-        })
+    async fn public_key_exists<'a>(
+        &self,
+        user: &'a [u8],
+        service: &'a [u8],
+        algorithm: &'a [u8],
+        key: &'a [u8],
+    ) -> Result<(), ()> {
+        if algorithm == b"ssh-ed25519" {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    async fn authenticate<'a>(
+        &self,
+        user: &'a [u8],
+        service: &'a [u8],
+        auth: Auth<'a>,
+    ) -> Result<Self::User, ()> {
+        match auth {
+            Auth::None => Err(()),
+            Auth::Password(pwd) => {
+                todo!()
+            }
+            Auth::PublicKey {
+                algorithm,
+                key,
+                signature,
+                message,
+            } => {
+                if algorithm != b"ssh-ed25519" {
+                    return Err(());
+                }
+                use ed25519_dalek::Verifier;
+                // FIXME don't fucking just reuse key doofus.
+                let key = ed25519_dalek::PublicKey::from_bytes(key.try_into().map_err(|_| ())?)
+                    .map_err(|_| ())?;
+                key.verify(message, &signature.try_into().map_err(|_| ())?)
+                    .map_err(|_| ())?;
+                Ok(User {
+                    name: core::str::from_utf8(user).unwrap().into(),
+                    shell: None,
+                })
+            }
+        }
     }
 
     async fn spawn<'a>(

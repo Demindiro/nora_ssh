@@ -2,8 +2,9 @@
 //!
 //! [RFC 4252]: https://datatracker.ietf.org/doc/html/rfc4252
 
-use crate::data::{
-    make_bool, make_raw, make_string2, parse_string, AsciiStr, InvalidNameList, NameList,
+use crate::{
+    data::{make_bool, make_raw, make_string2, parse_string, AsciiStr, InvalidNameList, NameList},
+    identifier::Identifier,
 };
 use core::str;
 
@@ -323,8 +324,7 @@ pub struct Failure<'a> {
 
 impl<'a> Failure<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, FailureParseError> {
-        let (alternative_methods, data) =
-            parse_string(data).ok_or(FailureParseError::Truncated)?;
+        let (alternative_methods, data) = parse_string(data).ok_or(FailureParseError::Truncated)?;
         match data {
             &[] => Err(FailureParseError::Truncated),
             &[partial_success] => Ok(Self {
@@ -421,6 +421,29 @@ impl<'a> PublicKeyOk<'a> {
 pub enum PublicKeyOkParseError {
     Truncated,
     Unread,
+}
+
+/// Format data for signing & verifying client keys.
+///
+/// Fails if the buffer is too small.
+pub fn format_sign_data<'a>(
+    buf: &'a mut [u8],
+    session_identifier: &[u8],
+    user: &[u8],
+    service: &[u8],
+    algorithm: &[u8],
+    blob: &[u8],
+) -> Option<&'a [u8]> {
+    let (_, b) = make_string2(buf, session_identifier)?;
+    let (_, b) = make_raw(b, &[UserAuth::REQUEST])?;
+    let (_, b) = make_string2(b, user)?;
+    let (_, b) = make_string2(b, service)?;
+    let (_, b) = make_string2(b, b"publickey")?;
+    let (_, b) = make_bool(b, true)?;
+    let (_, b) = make_string2(b, algorithm)?;
+    let (_, b) = make_string2(b, blob)?;
+    let l = b.len();
+    Some(&buf[..buf.len() - l])
 }
 
 #[cfg(test)]

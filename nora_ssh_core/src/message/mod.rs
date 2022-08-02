@@ -14,9 +14,7 @@ pub use service::{
 };
 pub use userauth::UserAuth;
 
-use crate::data::{
-    make_bool, make_string2, make_uint32, parse_bool, parse_string, parse_uint32,
-};
+use crate::data::{make_bool, make_string2, make_uint32, parse_bool, parse_string, parse_uint32};
 use core::ops::RangeInclusive;
 
 pub enum Message<'a> {
@@ -202,7 +200,8 @@ pub struct Disconnect<'a> {
 impl<'a> Disconnect<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, DisconnectParseError> {
         let reason = data.get(..4).ok_or(DisconnectParseError::BadLength)?;
-        let (description, data) = parse_string(&data[4..]).ok_or(DisconnectParseError::BadLength)?;
+        let (description, data) =
+            parse_string(&data[4..]).ok_or(DisconnectParseError::BadLength)?;
         let (language, data) = parse_string(data).ok_or(DisconnectParseError::BadLength)?;
         if !data.is_empty() {
             Err(DisconnectParseError::BadLength)

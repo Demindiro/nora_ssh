@@ -2,9 +2,7 @@
 
 pub mod session;
 
-use crate::data::{
-    make_bool, make_raw, make_string2, make_uint32, parse_string, parse_uint32,
-};
+use crate::data::{make_bool, make_raw, make_string2, make_uint32, parse_string, parse_uint32};
 use core::str;
 
 pub enum Channel<'a> {

@@ -28,7 +28,11 @@ use std::{
 fn main() {
     match start() {
         Ok(()) => {}
-        Err(e) => eprintln!("{} failed: {}", std::env::args().next().as_deref().unwrap_or("scp"),  e),
+        Err(e) => eprintln!(
+            "{} failed: {}",
+            std::env::args().next().as_deref().unwrap_or("scp"),
+            e
+        ),
     }
 }
 

@@ -1,4 +1,5 @@
 mod arena;
+pub mod auth;
 pub mod client;
 mod host;
 mod identifier;

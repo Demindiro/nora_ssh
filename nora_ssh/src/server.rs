@@ -1,5 +1,6 @@
 use crate::{
     arena::Arena,
+    auth::Auth,
     host::{self, Host, HostClient, HostKey, InError, OutError, SignKey},
     sync::LocalMutex,
 };
@@ -17,11 +18,11 @@ use futures::{
 use generic_array::ArrayLength;
 use nora_ssh_core::{
     cipher::{ChaCha20Poly1305, Cipher},
+    data,
     identifier::Identifier,
     message::{self as msg, channel::session::SessionRequest, Message},
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
-use std::rc::Rc;
 use subtle::CtOption;
 
 type Authenticating<Handlers> = Pin<Box<dyn Future<Output = Result<Client<Handlers>, ()>>>>;
@@ -83,11 +84,14 @@ where
         }
     }
 
+    /// [1]: https://datatracker.ietf.org/doc/html/rfc4252
     async fn authenticate_new_client(
         &self,
         mut rd: Handlers::Read,
         mut wr: Handlers::Write,
     ) -> Result<Client<Handlers>, ()> {
+        use msg::userauth::{Failure, Method, PublicKeyOk, Success, UserAuth};
+
         let mut rng = <Handlers::Rng as SeedableRng>::from_entropy();
 
         // Exchange keys
@@ -96,6 +100,7 @@ where
             .handle_new_client(&mut rd, &mut wr, &mut rng)
             .await
             .map_err(|_| ())?;
+        let session_identifier = *client.session_identifier();
         let (mut wr_enc, mut rd_enc) = client.into_send_receive();
 
         let mut pkt_buf = Vec::new();
@@ -122,17 +127,100 @@ where
             _ => todo!(),
         }
 
-        // Wait for userauth request
-        let data = rd_enc.recv(&mut pkt_buf, &mut rd).await.unwrap();
-        let msg = Message::parse(data).unwrap();
-        let ua = msg.into_user_auth().unwrap().into_request().unwrap();
-
         // Attempt authentication
+        let mut message = [0; 1024];
         loop {
-            match self.handlers.authenticate(b"TODO").await {
+            // Wait for userauth request
+            let data = rd_enc.recv(&mut pkt_buf, &mut rd).await.unwrap();
+            let msg = Message::parse(data).unwrap();
+            let ua = msg.into_user_auth().unwrap().into_request().unwrap();
+
+            let auth = match ua.method {
+                Method::None => Auth::None,
+                Method::PublicKeyBlob { algorithm, blob } => {
+                    let (a, b) = data::parse_string(blob).ok_or(())?;
+                    let (key, b) = data::parse_string(b).ok_or(())?;
+                    if !b.is_empty() {
+                        return Err(());
+                    }
+                    if algorithm != a {
+                        return Err(());
+                    }
+                    let msg = Message::UserAuth(match self
+                        .handlers
+                        .public_key_exists(ua.user, ua.service, algorithm, key)
+                        .await
+                    {
+                        Ok(()) => UserAuth::PublicKeyOk(PublicKeyOk {
+                            algorithm,
+                            blob,
+                        }),
+                        Err(()) => UserAuth::Failure(Failure {
+                            alternative_methods: b"publickey,password".try_into().unwrap(),
+                            partial_success: false,
+                        }),
+                    });
+                    wr_enc
+                        .send(
+                            &mut pkt_buf_mini,
+                            |buf| msg.serialize(buf).unwrap().0.len(),
+                            &mut wr,
+                            &mut rng,
+                        )
+                        .await
+                        .unwrap();
+                    continue;
+                }
+                Method::PublicKeySigned {
+                    algorithm,
+                    key: key_blob,
+                    signature,
+                } => {
+                    let (a, b) = data::parse_string(key_blob).ok_or(())?;
+                    let (key, b) = data::parse_string(b).ok_or(())?;
+                    if !b.is_empty() {
+                        return Err(());
+                    }
+                    if algorithm != a {
+                        return Err(());
+                    }
+
+                    let (a, b) = data::parse_string(signature).ok_or(())?;
+                    let (signature, b) = data::parse_string(b).ok_or(())?;
+                    if !b.is_empty() {
+                        return Err(());
+                    }
+                    if algorithm != a {
+                        return Err(());
+                    }
+
+                    let message = msg::userauth::format_sign_data(
+                        &mut message,
+                        &session_identifier,
+                        ua.user,
+                        ua.service,
+                        algorithm,
+                        key_blob,
+                    )
+                    .unwrap_or_else(|| todo!());
+
+                    Auth::PublicKey {
+                        algorithm,
+                        signature,
+                        key,
+                        message,
+                    }
+                }
+                Method::Password { password } => Auth::Password(password),
+                Method::PasswordRenew { .. } => todo!(),
+                Method::HostBased { .. } => todo!(),
+                Method::Other { .. } => todo!(),
+            };
+
+            match self.handlers.authenticate(ua.user, ua.service, auth).await {
                 Ok(user) => {
                     // Accept
-                    let msg = Message::UserAuth(msg::UserAuth::Success(msg::userauth::Success));
+                    let msg = Message::UserAuth(UserAuth::Success(Success));
                     wr_enc
                         .send(
                             &mut pkt_buf,
@@ -150,10 +238,23 @@ where
                         rng: RefCell::new(rng),
                     });
                 }
-                Err(()) => break, // TODO
+                Err(()) => {
+                    let msg = Message::UserAuth(UserAuth::Failure(Failure {
+                        alternative_methods: b"publickey,password".try_into().unwrap(),
+                        partial_success: false,
+                    }));
+                    wr_enc
+                        .send(
+                            &mut pkt_buf,
+                            |buf| msg.serialize(buf).unwrap().0.len(),
+                            &mut wr,
+                            &mut rng,
+                        )
+                        .await
+                        .unwrap();
+                }
             }
         }
-        Err(())
     }
 }
 
@@ -497,7 +598,19 @@ where
     type Rng: RngCore + CryptoRng + SeedableRng;
 
     async fn accept(&self) -> (Self::Read, Self::Write);
-    async fn authenticate<'a>(&self, data: &'a [u8]) -> Result<Self::User, ()>;
+    async fn public_key_exists<'a>(
+        &self,
+        user: &'a [u8],
+        service: &'a [u8],
+        algorithm: &'a [u8],
+        key: &'a [u8],
+    ) -> Result<(), ()>;
+    async fn authenticate<'a>(
+        &self,
+        user: &'a [u8],
+        service: &'a [u8],
+        auth: Auth<'a>,
+    ) -> Result<Self::User, ()>;
     async fn spawn<'a>(
         &self,
         user: &'a mut Self::User,

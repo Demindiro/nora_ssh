@@ -295,6 +295,7 @@ impl Host<p256::NistP256> {
         Ok(HostClient {
             receive_cipher,
             send_cipher,
+            session_identifier: *hash.as_ref(),
         })
     }
 }
@@ -386,6 +387,13 @@ pub enum InError {
 pub struct HostClient<D: Cipher> {
     receive_cipher: In<D>,
     send_cipher: Out<D>,
+    session_identifier: [u8; 32],
+}
+
+impl<D: Cipher> HostClient<D> {
+    pub fn session_identifier(&self) -> &[u8; 32] {
+        &self.session_identifier
+    }
 }
 
 impl<D: Cipher> HostClient<D> {
