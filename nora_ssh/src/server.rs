@@ -131,9 +131,9 @@ where
         let mut message = [0; 1024];
         loop {
             // Wait for userauth request
-            let data = rd_enc.recv(&mut pkt_buf, &mut rd).await.unwrap();
-            let msg = Message::parse(data).unwrap();
-            let ua = msg.into_user_auth().unwrap().into_request().unwrap();
+            let data = rd_enc.recv(&mut pkt_buf, &mut rd).await.map_err(|_| ())?;
+            let msg = Message::parse(data).map_err(|_| ())?;
+            let ua = msg.into_user_auth().unwrap().into_request().ok_or(())?;
 
             let auth = match ua.method {
                 Method::None => Auth::None,
